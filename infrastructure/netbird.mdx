@@ -1,0 +1,562 @@
+---
+title: NetBird WireGuard Tunneling
+description: Mesh networking with NetBird for secure, isolated demo workspace connectivity
+---
+
+## Overview
+
+NetBird provides WireGuard-based mesh networking for NeoSC, enabling secure peer-to-peer connectivity between demo workspaces, orchestration nodes, and control plane services. It implements network-level isolation and Zero Trust access controls.
+
+## Architecture
+
+NetBird creates an encrypted mesh network using WireGuard:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    NetBird Control Plane                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │ Management   │  │ Signal       │  │ TURN/STUN    │         │
+│  │ Server       │  │ Server       │  │ (Coturn)     │         │
+│  │ :443         │  │ :10000       │  │ :3478        │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ WireGuard Mesh (100.64.0.0/10)
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+   ┌────▼────┐         ┌──────▼──────┐      ┌──────▼──────┐
+   │ Control │         │ Orchestration│      │ Demo        │
+   │ Plane   │         │ (Swarm)      │      │ Workspaces  │
+   │ Group   │         │ Group        │      │ (Isolated)  │
+   └─────────┘         └──────────────┘      └─────────────┘
+```
+
+## NetBird Groups
+
+NetBird organizes peers into groups for access control:
+
+### Static Groups
+
+| Group | Purpose | Peers |
+|-------|---------|-------|
+| `control-plane` | Core infrastructure | Zitadel, Pomerium, NetBird management |
+| `orchestration` | Container orchestration | Docker Swarm managers and workers |
+
+### Dynamic Demo Groups
+
+| Group | Purpose | Lifecycle |
+|-------|---------|----------|
+| `demo-windows` | TSplus/Windows workspaces | Created per session, auto-cleanup |
+| `demo-linux` | Linux desktop workspaces | Created per session, auto-cleanup |
+| `demo-webapp` | Web application workspaces | Created per session, auto-cleanup |
+
+## Installation
+
+### Self-Hosted NetBird
+
+<Note>
+  NeoSC uses a self-hosted NetBird instance at `netbird.neosc.com` for full control over networking and data.
+</Note>
+
+#### Management Server
+
+```bash
+# Deploy NetBird Management Server
+docker run -d \
+  --name netbird-management \
+  --restart unless-stopped \
+  -p 443:443 \
+  -p 33073:33073 \
+  -v netbird-mgmt:/var/lib/netbird \
+  -e NETBIRD_DOMAIN=netbird.neosc.com \
+  -e NETBIRD_AUTH_OIDC_CONFIGURATION_ENDPOINT=https://manager.kappa4.com/.well-known/openid-configuration \
+  -e NETBIRD_AUTH_OIDC_CLIENT_ID=${ZITADEL_CLIENT_ID} \
+  -e NETBIRD_AUTH_AUDIENCE=netbird-api \
+  netbirdio/management:latest
+```
+
+#### Signal Server
+
+```bash
+# Deploy NetBird Signal Server (for peer discovery)
+docker run -d \
+  --name netbird-signal \
+  --restart unless-stopped \
+  -p 10000:10000 \
+  -v netbird-signal:/var/lib/netbird \
+  netbirdio/signal:latest
+```
+
+#### TURN/STUN Server (Optional)
+
+For NAT traversal when direct peer-to-peer connections fail:
+
+```bash
+# Deploy Coturn for TURN/STUN
+docker run -d \
+  --name coturn \
+  --restart unless-stopped \
+  -p 3478:3478/udp \
+  -p 3478:3478/tcp \
+  -p 5349:5349/udp \
+  -p 5349:5349/tcp \
+  -v coturn-config:/etc/coturn \
+  coturn/coturn:latest
+```
+
+## Access Control Policies
+
+NetBird uses ACL policies to control network traffic between groups:
+
+### Policy 1: Control Plane Full Access
+
+```yaml
+# Control plane can reach all groups
+policies:
+  - name: control-plane-full-access
+    enabled: true
+    description: "Control plane has full network access"
+    source_groups:
+      - control-plane
+    destination_groups:
+      - "*"
+    bidirectional: false
+    action: accept
+    protocol: all
+    ports:
+      - "1-65535"
+```
+
+### Policy 2: Orchestration to Workspaces
+
+```yaml
+# Swarm managers can deploy and manage demo containers
+policies:
+  - name: orchestration-to-containers
+    enabled: true
+    description: "Orchestration can manage demo workspaces"
+    source_groups:
+      - orchestration
+    destination_groups:
+      - demo-windows
+      - demo-linux
+      - demo-webapp
+    bidirectional: false
+    action: accept
+    protocol: tcp
+    ports:
+      - "2377"   # Docker Swarm
+      - "7946"   # Container network discovery
+      - "4789"   # Overlay network
+      - "6900"   # Kasm streaming
+      - "443"    # HTTPS
+```
+
+### Policy 3: Demo Isolation
+
+<Warning>
+  **Critical Security Policy**: Demo workspaces MUST be isolated from each other to prevent lateral movement.
+</Warning>
+
+```yaml
+# Demo containers cannot communicate with each other
+policies:
+  - name: demo-isolation
+    enabled: true
+    description: "Demos are isolated - no peer-to-peer access"
+    source_groups:
+      - demo-windows
+      - demo-linux
+      - demo-webapp
+    destination_groups:
+      - demo-windows
+      - demo-linux
+      - demo-webapp
+    bidirectional: true
+    action: drop
+    protocol: all
+    ports:
+      - "1-65535"
+```
+
+### Policy 4: No Internet Access
+
+```yaml
+# Demo containers cannot access external internet
+policies:
+  - name: demo-no-internet
+    enabled: true
+    description: "Block demo workspaces from internet"
+    source_groups:
+      - demo-windows
+      - demo-linux
+      - demo-webapp
+    destination_groups:
+      - "*"
+    bidirectional: false
+    action: drop
+    protocol: all
+    ports:
+      - "1-65535"
+    destination_ips:
+      - "0.0.0.0/0"
+    exceptions:
+      # Allow internal DNS only
+      - destination_ips: ["100.64.1.53"]
+        ports: ["53"]
+        protocol: udp
+```
+
+## Backend Integration
+
+The NeoSC backend provisions NetBird peers dynamically for each demo session.
+
+### API Configuration
+
+```python
+import httpx
+
+NETBIRD_API = "https://netbird.neosc.com/api"
+NETBIRD_TOKEN = os.getenv("NETBIRD_TOKEN")  # Management API token
+
+headers = {
+    "Authorization": f"Bearer {NETBIRD_TOKEN}",
+    "Content-Type": "application/json"
+}
+```
+
+### Create Ephemeral Peer
+
+When a demo session starts, create a temporary NetBird peer:
+
+```python
+async def create_netbird_peer(
+    session_id: str,
+    workspace_type: str,
+    netbird_group: str,
+    expires_at: datetime
+) -> dict:
+    """
+    Create ephemeral NetBird peer for demo session
+    """
+    
+    # 1. Generate one-time setup key
+    setup_key_response = await httpx.post(
+        f"{NETBIRD_API}/setup-keys",
+        headers=headers,
+        json={
+            "name": f"demo-{session_id}",
+            "type": "one-time",  # Key expires after first use
+            "expires_in": 3600,  # 1 hour
+            "auto_groups": [netbird_group],  # Automatically join group
+            "usage_limit": 1,
+            "ephemeral": True  # Peer deleted when disconnected
+        }
+    )
+    
+    setup_key = setup_key_response.json()["key"]
+    
+    # 2. Register peer
+    peer_response = await httpx.post(
+        f"{NETBIRD_API}/peers",
+        headers=headers,
+        json={
+            "name": f"demo-container-{session_id}",
+            "host_name": f"{workspace_type}-{session_id}",
+            "groups": [netbird_group],
+            "ssh_enabled": False,
+            "login_expiration_enabled": True,
+            "login_expiration": expires_at.isoformat(),
+            "approval_required": False,
+            "labels": {
+                "session_id": session_id,
+                "workspace_type": workspace_type,
+                "demo": "true",
+                "ephemeral": "true"
+            }
+        }
+    )
+    
+    peer = peer_response.json()
+    
+    return {
+        "peer_id": peer["id"],
+        "peer_ip": peer["ip"],  # IP in 100.64.0.0/10 range
+        "setup_key": setup_key,
+        "wg_public_key": peer["public_key"]
+    }
+```
+
+### Configure Session-Specific ACL
+
+Create fine-grained ACL for each session:
+
+```python
+async def configure_session_acl(
+    session_id: str,
+    peer_id: str,
+    container_ip: str,
+    workspace_type: str
+):
+    """
+    Create ACL rule allowing ONLY this user to access their container
+    """
+    
+    acl_response = await httpx.post(
+        f"{NETBIRD_API}/acls",
+        headers=headers,
+        json={
+            "name": f"demo-session-{session_id}",
+            "description": f"Temporary ACL for demo {session_id}",
+            "enabled": True,
+            "rules": [
+                {
+                    # Allow: user peer → their container
+                    "name": f"allow-{session_id}-to-container",
+                    "source_peers": [peer_id],
+                    "destination_ips": [container_ip],
+                    "protocol": "tcp",
+                    "ports": ["6900", "443"],  # Kasm + HTTPS
+                    "action": "accept"
+                },
+                {
+                    # Deny: user peer → everything else
+                    "name": f"deny-{session_id}-lateral",
+                    "source_peers": [peer_id],
+                    "destination_ips": ["100.64.0.0/10"],  # NetBird range
+                    "protocol": "all",
+                    "ports": ["1-65535"],
+                    "action": "drop",
+                    "priority": 1000  # Lower priority than allow rule
+                }
+            ],
+            "metadata": {
+                "session_id": session_id,
+                "workspace_type": workspace_type,
+                "auto_cleanup": True,
+                "expires_at": expires_at.isoformat()
+            }
+        }
+    )
+    
+    return acl_response.json()
+```
+
+### Cleanup on Session End
+
+Remove NetBird resources when demo expires:
+
+```python
+async def cleanup_netbird_peer(session_id: str, peer_id: str):
+    """
+    Delete NetBird peer and associated ACL
+    """
+    
+    # 1. Delete peer (ephemeral peers auto-delete, but clean up explicitly)
+    await httpx.delete(
+        f"{NETBIRD_API}/peers/{peer_id}",
+        headers=headers
+    )
+    
+    # 2. Delete session-specific ACL
+    acls = await httpx.get(
+        f"{NETBIRD_API}/acls",
+        headers=headers,
+        params={"name": f"demo-session-{session_id}"}
+    )
+    
+    for acl in acls.json():
+        await httpx.delete(
+            f"{NETBIRD_API}/acls/{acl['id']}",
+            headers=headers
+        )
+    
+    logger.info(f"NetBird resources cleaned up for session {session_id}")
+```
+
+## Network Topology
+
+NetBird assigns IPs from the `100.64.0.0/10` range (CGNAT space):
+
+```
+100.64.0.0/10 - NetBird Mesh Network
+├── 100.64.0.1      - NetBird Management (gateway)
+├── 100.64.1.53     - Internal DNS
+├── 100.64.10.0/24  - Control Plane
+│   ├── 100.64.10.1 - Pomerium
+│   ├── 100.64.10.2 - Zitadel
+│   └── 100.64.10.3 - NetBird Management
+├── 100.64.20.0/24  - Orchestration
+│   ├── 100.64.20.1 - Swarm Manager 1
+│   ├── 100.64.20.2 - Swarm Manager 2
+│   └── 100.64.20.10-50 - Swarm Workers
+└── 100.64.100.0/22 - Demo Workspaces (ephemeral)
+    ├── 100.64.100.1-254 - Windows demos
+    ├── 100.64.101.1-254 - Linux demos
+    └── 100.64.102.1-254 - WebApp demos
+```
+
+## Security Features
+
+### End-to-End Encryption
+
+All traffic encrypted with WireGuard:
+
+- **Protocol**: WireGuard (ChaCha20-Poly1305)
+- **Key Exchange**: Curve25519
+- **Perfect Forward Secrecy**: Automatic key rotation
+
+### Zero Trust Enforcement
+
+<CardGroup cols={2}>
+  <Card title="Default Deny" icon="ban">
+    All traffic blocked unless explicitly allowed by ACL policy
+  </Card>
+  <Card title="Peer Isolation" icon="shield">
+    Each demo workspace isolated in its own network segment
+  </Card>
+  <Card title="Ephemeral Peers" icon="clock">
+    Demo peers auto-deleted when session ends or disconnects
+  </Card>
+  <Card title="Fine-Grained ACLs" icon="list-check">
+    Per-session ACLs ensure users only access their own workspace
+  </Card>
+</CardGroup>
+
+### Monitoring
+
+Track NetBird peer status:
+
+```python
+from prometheus_client import Gauge
+
+# Metrics
+netbird_peers = Gauge(
+    'netbird_peers_total',
+    'Total NetBird peers',
+    ['group', 'status']
+)
+
+async def update_netbird_metrics():
+    """Update Prometheus metrics for NetBird peers"""
+    
+    peers = await httpx.get(
+        f"{NETBIRD_API}/peers",
+        headers=headers
+    )
+    
+    # Count by group and status
+    for peer in peers.json():
+        group = peer.get("groups", ["unknown"])[0]
+        status = "online" if peer["connected"] else "offline"
+        netbird_peers.labels(group=group, status=status).inc()
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Peer unable to connect">
+    **Symptoms**: Peer shows "disconnected" in NetBird dashboard.
+    
+    **Checks**:
+    ```bash
+    # Check WireGuard interface
+    ip link show wt0
+    
+    # Check NetBird service
+    systemctl status netbird
+    
+    # View NetBird logs
+    journalctl -u netbird -f
+    ```
+    
+    **Common causes**:
+    - Firewall blocking UDP port 51820
+    - Setup key expired
+    - Management server unreachable
+  </Accordion>
+  
+  <Accordion title="Peer connected but can't reach destination">
+    **Cause**: ACL policy blocking traffic.
+    
+    **Solution**:
+    1. Check ACL rules in NetBird dashboard
+    2. Verify peer is in correct group
+    3. Test with `ping` from source peer:
+       ```bash
+       ping <destination-ip>
+       ```
+    4. Check NetBird logs for dropped packets
+  </Accordion>
+  
+  <Accordion title="High latency between peers">
+    **Cause**: TURN relay being used instead of direct connection.
+    
+    **Solution**:
+    - Configure STUN/TURN servers
+    - Check NAT traversal settings
+    - Enable UPnP/NAT-PMP on router
+    - Use relay server closer to peers
+  </Accordion>
+</AccordionGroup>
+
+## Visual Integration
+
+<Note>
+  NetBird provides a web-based dashboard for visual network management at `https://netbird.neosc.com`.
+</Note>
+
+### Dashboard Features
+
+- **Peer Map**: Visual topology of mesh network
+- **ACL Editor**: GUI for creating and editing access policies
+- **Real-Time Monitoring**: Live peer status and traffic statistics
+- **Audit Logs**: Complete history of peer connections and policy changes
+
+### API-First Design
+
+All dashboard operations available via REST API for automation:
+
+```bash
+# List all peers
+curl -H "Authorization: Bearer $NETBIRD_TOKEN" \
+  https://netbird.neosc.com/api/peers
+
+# Get peer details
+curl -H "Authorization: Bearer $NETBIRD_TOKEN" \
+  https://netbird.neosc.com/api/peers/{peer-id}
+
+# Delete peer
+curl -X DELETE \
+  -H "Authorization: Bearer $NETBIRD_TOKEN" \
+  https://netbird.neosc.com/api/peers/{peer-id}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Ephemeral Peers" icon="hourglass">
+    Enable ephemeral mode for demo workspaces to auto-cleanup on disconnect
+  </Card>
+  <Card title="Minimize ACL Scope" icon="filter">
+    Create narrow, session-specific ACLs instead of broad group policies
+  </Card>
+  <Card title="Monitor Peer Count" icon="chart-line">
+    Alert on unexpected peer growth - may indicate provisioning failures
+  </Card>
+  <Card title="Regular Audits" icon="magnifying-glass">
+    Review ACL policies and peer list weekly to remove stale entries
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zero Trust Architecture" icon="shield" href="/infrastructure/zero-trust">
+    Learn how NetBird fits into the Zero Trust model
+  </Card>
+  <Card title="Docker Swarm" icon="docker" href="/infrastructure/docker-compose">
+    Integrate NetBird with container orchestration
+  </Card>
+</CardGroup>

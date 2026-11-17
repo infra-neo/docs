@@ -1,0 +1,559 @@
+---
+title: Pomerium Reverse Proxy
+description: Configuration, policies, and route definitions for the Pomerium Zero Trust proxy
+---
+
+## Overview
+
+Pomerium is an identity-aware reverse proxy that acts as the authentication and authorization gateway for all NeoSC services. It integrates with Zitadel (OIDC provider) to enforce Zero Trust access policies.
+
+## Configuration File
+
+Pomerium configuration is located at `infra/pomerium/config.yaml`:
+
+```yaml
+# Pomerium Zero Trust Proxy Configuration
+authenticate_service_url: https://gate.kappa4.com
+
+# Identity Provider: Zitadel (OIDC)
+idp_provider: oidc
+idp_provider_url: https://manager.kappa4.com
+idp_client_id: ${ZITADEL_CLIENT_ID}
+idp_client_secret: ${ZITADEL_CLIENT_SECRET}
+
+idp_scopes:
+  - openid
+  - profile
+  - email
+  - offline_access
+  - urn:zitadel:iam:org:projects:roles
+
+# Secrets (loaded from environment)
+shared_secret: ${POMERIUM_SHARED_SECRET}
+cookie_secret: ${POMERIUM_COOKIE_SECRET}
+
+# Cookie configuration
+cookie_name: _pomerium
+cookie_domain: .kappa4.com  # Valid for all subdomains
+cookie_expire: 8h
+cookie_http_only: true
+cookie_secure: true
+cookie_same_site: lax
+
+# TLS configuration
+insecure_server: false
+address: :443
+
+# Timeouts
+default_upstream_timeout: 30s
+idle_timeout: 15m
+grpc_client_dns_roundrobin: true
+
+# Logging
+log_level: info
+log_format: json
+```
+
+## Environment Variables
+
+Required environment variables in `infra/.env`:
+
+```bash
+# Zitadel OIDC credentials
+ZITADEL_CLIENT_ID=<client-id-from-zitadel>
+ZITADEL_CLIENT_SECRET=<client-secret-from-zitadel>
+
+# Pomerium secrets (generate with: openssl rand -base64 32)
+POMERIUM_SHARED_SECRET=<32-byte-base64-secret>
+POMERIUM_COOKIE_SECRET=<32-byte-base64-secret>
+```
+
+<Warning>
+  **Security**: Never commit secrets to git. Generate unique secrets for each environment.
+</Warning>
+
+## Routes and Policies
+
+Pomerium defines access policies for each protected route:
+
+### Route 1: Portal (Frontend)
+
+```yaml
+policy:
+  # portal.kappa4.com → frontend:3000
+  - from: https://portal.kappa4.com
+    to: http://frontend:3000
+    
+    # Require authentication
+    allow_any_authenticated_user: false
+    
+    # Only users with specific roles
+    allowed_idp_claims:
+      urn:zitadel:iam:org:project:roles:
+        - admin
+        - neosc
+        - user
+    
+    # Inject identity headers to upstream
+    pass_identity_headers: true
+    set_request_headers:
+      X-Pomerium-Email: "${pomerium.email}"
+      X-Pomerium-Groups: "${pomerium.groups}"
+      X-Pomerium-User: "${pomerium.user}"
+    
+    # SPA and WebSocket support
+    cors_allow_preflight: true
+    allow_websockets: true
+    preserve_host_header: true
+    timeout: 0s
+```
+
+**Who can access**: Users with roles `admin`, `neosc`, or `user` in the Zitadel project.
+
+**Headers injected**:
+- `X-Pomerium-Email` - User's email address
+- `X-Pomerium-User` - User's unique ID
+- `X-Pomerium-Groups` - Comma-separated list of groups/roles
+
+### Route 2: Backend API
+
+```yaml
+policy:
+  # api.portal.kappa4.com → backend:8001
+  - from: https://api.portal.kappa4.com
+    to: http://backend:8001
+    
+    allow_any_authenticated_user: false
+    
+    allowed_idp_claims:
+      urn:zitadel:iam:org:project:roles:
+        - admin
+        - neosc
+        - user
+    
+    pass_identity_headers: true
+    set_request_headers:
+      X-Pomerium-Email: "${pomerium.email}"
+      X-Pomerium-User: "${pomerium.user}"
+      X-Pomerium-Groups: "${pomerium.groups}"
+    
+    # Remove authorization header (Pomerium handles auth)
+    remove_request_headers:
+      - Authorization
+    
+    cors_allow_preflight: true
+    timeout: 30s
+```
+
+**Key features**:
+- Removes `Authorization` header to prevent JWT bypass
+- 30-second timeout for API requests
+- CORS preflight support for browser requests
+
+### Route 3: Admin Panel
+
+```yaml
+policy:
+  # admin.portal.kappa4.com → backend:8001/admin
+  - from: https://admin.portal.kappa4.com
+    to: http://backend:8001
+    
+    # Only admin role allowed
+    allowed_idp_claims:
+      urn:zitadel:iam:org:project:roles:
+        - admin
+    
+    pass_identity_headers: true
+    timeout: 30s
+```
+
+**Who can access**: Only users with the `admin` role.
+
+### Route 4: Workspace Viewer
+
+```yaml
+policy:
+  # workspace.portal.kappa4.com → kasm-proxy:6900
+  - from: https://workspace.portal.kappa4.com
+    to: http://kasm-proxy:6900
+    
+    # Require active demo session claim
+    allowed_idp_claims:
+      neosc:demo_session_id:
+        - "*"  # Any valid session ID
+    
+    pass_identity_headers: true
+    set_request_headers:
+      X-User-Email: "${pomerium.email}"
+      X-Session-ID: "${pomerium.claims.neosc:demo_session_id}"
+      X-Workspace-Type: "${pomerium.claims.neosc:workspace_type}"
+    
+    # Critical for VDI streaming
+    allow_websockets: true
+    allow_spdy: true
+    timeout: 0s  # No timeout for long-lived streaming
+    preserve_host_header: true
+```
+
+**Who can access**: Users with an active demo session (JIT claim `neosc:demo_session_id` present).
+
+**Special features**:
+- WebSocket and SPDY support for real-time streaming
+- No timeout (streaming can last entire session)
+- Custom headers with session metadata
+
+## Identity Headers
+
+Pomerium injects the following headers for authenticated requests:
+
+### Standard Headers
+
+| Header | Description | Example |
+|--------|-------------|----------|
+| `X-Pomerium-Email` | User's email address | `user@company.com` |
+| `X-Pomerium-User` | User's unique ID from IdP | `user-id-12345` |
+| `X-Pomerium-Groups` | Comma-separated roles | `admin,neosc` |
+| `X-Pomerium-Claim-*` | Individual claims from token | `X-Pomerium-Claim-Name: John Doe` |
+
+### Custom Claims
+
+For demo sessions with JIT provisioning:
+
+| Header | Description | Example |
+|--------|-------------|----------|
+| `X-Session-ID` | Demo session identifier | `demo-1234567890-abc` |
+| `X-Workspace-Type` | Type of workspace | `linux`, `tsplus`, `webapp` |
+| `X-Expires-At` | Session expiration time | `2026-03-05T12:30:00Z` |
+
+### Backend Validation
+
+Backend services validate these headers:
+
+```python
+from fastapi import Header, HTTPException
+from typing import Optional
+
+async def verify_pomerium_headers(
+    x_pomerium_email: Optional[str] = Header(None),
+    x_pomerium_user: Optional[str] = Header(None)
+):
+    if not all([x_pomerium_email, x_pomerium_user]):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Pomerium identity headers"
+        )
+    
+    return {
+        "email": x_pomerium_email,
+        "user_id": x_pomerium_user
+    }
+
+# Use in endpoint
+@app.get("/api/user/profile")
+async def get_profile(user: dict = Depends(verify_pomerium_headers)):
+    # User identity verified by Pomerium
+    return await db.users.find_one({"email": user["email"]})
+```
+
+## Session Management
+
+### Cookie Details
+
+Pomerium creates a session cookie after successful authentication:
+
+```http
+Set-Cookie: _pomerium=<encrypted-token>; 
+            Domain=.kappa4.com; 
+            Path=/; 
+            Secure; 
+            HttpOnly; 
+            SameSite=Lax; 
+            Max-Age=28800
+```
+
+**Cookie properties**:
+- **Name**: `_pomerium`
+- **Domain**: `.kappa4.com` (wildcard - valid for all subdomains)
+- **Lifetime**: 8 hours (28800 seconds)
+- **Flags**: `Secure`, `HttpOnly`, `SameSite=Lax`
+
+### Session Lifecycle
+
+<Steps>
+  <Step title="Initial Request">
+    User requests `https://portal.kappa4.com` without a valid session cookie.
+  </Step>
+  <Step title="Redirect to Auth">
+    Pomerium redirects to `https://gate.kappa4.com/oauth2/sign_in`.
+  </Step>
+  <Step title="OAuth Flow">
+    Pomerium initiates OAuth 2.0 flow with Zitadel, redirecting user to Zitadel login page.
+  </Step>
+  <Step title="User Authenticates">
+    User enters credentials on Zitadel. After successful authentication, Zitadel redirects back with authorization code.
+  </Step>
+  <Step title="Token Exchange">
+    Pomerium exchanges authorization code for access token, ID token, and refresh token.
+  </Step>
+  <Step title="Session Creation">
+    Pomerium validates token claims, creates encrypted session, and sets `_pomerium` cookie.
+  </Step>
+  <Step title="Redirect to App">
+    User is redirected to original destination (`https://portal.kappa4.com`).
+  </Step>
+  <Step title="Subsequent Requests">
+    All requests include `_pomerium` cookie. Pomerium validates session and proxies to backend.
+  </Step>
+</Steps>
+
+### Session Refresh
+
+Pomerium automatically refreshes sessions using refresh tokens:
+
+- Access tokens expire after 30 minutes
+- Pomerium uses refresh token to obtain new access token
+- User experiences no interruption
+- Session cookie remains valid for full 8 hours
+
+## TLS Configuration
+
+Pomerium requires TLS for production use.
+
+### Option 1: Manual Certificates
+
+```yaml
+certificates:
+  - cert_file: /etc/pomerium/tls/kappa4.com.crt
+    key_file: /etc/pomerium/tls/kappa4.com.key
+```
+
+Mount certificates in `docker-compose.yml`:
+
+```yaml
+pomerium:
+  volumes:
+    - ./pomerium/config.yaml:/etc/pomerium/config.yaml:ro
+    - ./pomerium/certs:/etc/pomerium/tls:ro
+```
+
+### Option 2: Let's Encrypt with Autocert
+
+<Warning>
+  Not recommended for production. Use external TLS termination (nginx, Caddy) or cert-manager instead.
+</Warning>
+
+```yaml
+autocert: true
+autocert_dir: /etc/pomerium/autocert
+```
+
+### Option 3: External TLS Termination
+
+For production, use nginx or Caddy in front of Pomerium:
+
+```nginx
+# nginx.conf
+server {
+    listen 443 ssl http2;
+    server_name gate.kappa4.com portal.kappa4.com *.portal.kappa4.com;
+    
+    ssl_certificate /etc/letsencrypt/live/kappa4.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/kappa4.com/privkey.pem;
+    
+    location / {
+        proxy_pass https://pomerium:443;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+## Advanced Policies
+
+### Time-Based Access
+
+Restrict access to business hours:
+
+```yaml
+policy:
+  - from: https://admin.portal.kappa4.com
+    to: http://backend:8001
+    
+    allowed_idp_claims:
+      urn:zitadel:iam:org:project:roles:
+        - admin
+    
+    policy:
+      - allow:
+          and:
+            # Monday-Friday only
+            - day_of_week:
+                is_in: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+            # 8am - 8pm
+            - time:
+                after: "08:00:00"
+                before: "20:00:00"
+                timezone: "America/Mexico_City"
+```
+
+### Rate Limiting
+
+Protect against abuse:
+
+```yaml
+policy:
+  - from: https://api.portal.kappa4.com
+    to: http://backend:8001
+    
+    policy:
+      - allow:
+          and:
+            - user:
+                is: "{{ .User.Email }}"
+          rate_limit:
+            requests_per_second: 10
+            burst: 20
+```
+
+### Session Expiration Validation
+
+For JIT demo sessions, validate token hasn't expired:
+
+```yaml
+policy:
+  - from: https://workspace.portal.kappa4.com
+    to: http://kasm-proxy:6900
+    
+    policy:
+      - allow:
+          and:
+            # Check demo hasn't expired
+            - claim/neosc:demo_expires_at:
+                is: after_now
+            # Check session ID is valid format
+            - claim/neosc:demo_session_id:
+                matches: "demo-*"
+```
+
+## Monitoring
+
+### Health Check
+
+Pomerium exposes a health endpoint:
+
+```bash
+# Check health
+wget -qO- http://localhost:5080/ping
+# Output: OK
+
+# Docker health check
+docker exec pomerium wget -qO- http://localhost:5080/ping
+```
+
+### Logs
+
+View Pomerium logs:
+
+```bash
+# Follow logs
+docker compose logs -f pomerium
+
+# Filter for authentication events
+docker compose logs pomerium | grep authenticate
+
+# Filter for authorization denials
+docker compose logs pomerium | grep deny
+```
+
+### Metrics
+
+Pomerium exposes Prometheus metrics on port 9090:
+
+```yaml
+# Add to config.yaml
+metrics_address: :9090
+```
+
+Key metrics:
+- `pomerium_authenticate_total` - Total authentication attempts
+- `pomerium_authorize_deny_total` - Authorization denials
+- `pomerium_proxy_requests_total` - Proxied requests
+- `pomerium_policy_evaluation_duration_seconds` - Policy evaluation time
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Invalid OAuth state">
+    **Cause**: Cookie domain mismatch or incorrect redirect URI.
+    
+    **Solution**:
+    1. Verify `cookie_domain: .kappa4.com` in config
+    2. Check redirect URI in Zitadel is `https://gate.kappa4.com/oauth2/callback`
+    3. Ensure DNS is correctly configured
+  </Accordion>
+  
+  <Accordion title="Error: x509 certificate signed by unknown authority">
+    **Cause**: TLS certificate not trusted.
+    
+    **Solution**:
+    - For self-signed certs, add to system trust store
+    - For production, use valid Let's Encrypt certificate
+    - Or set `insecure_server: true` (dev only)
+  </Accordion>
+  
+  <Accordion title="Error: No healthy upstream">
+    **Cause**: Backend service not reachable from Pomerium.
+    
+    **Solution**:
+    ```bash
+    # Check backend is running
+    docker compose ps backend
+    
+    # Test connectivity from Pomerium
+    docker compose exec pomerium wget -qO- http://backend:8001/health
+    
+    # Verify both are on same network
+    docker network inspect infra_internal
+    ```
+  </Accordion>
+  
+  <Accordion title="User stuck in redirect loop">
+    **Cause**: Session cookie not being set/read correctly.
+    
+    **Solution**:
+    1. Clear browser cookies for `.kappa4.com`
+    2. Verify `cookie_secure: true` and site is HTTPS
+    3. Check browser console for cookie errors
+    4. Disable browser extensions that block cookies
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Strong Secrets" icon="key">
+    Generate 32-byte secrets with `openssl rand -base64 32`. Never reuse secrets across environments.
+  </Card>
+  <Card title="Enable HTTPS Only" icon="lock">
+    Always use TLS in production. Set `cookie_secure: true` and `insecure_server: false`.
+  </Card>
+  <Card title="Minimize Cookie Lifetime" icon="clock">
+    Keep session cookies short-lived (8 hours max). Use refresh tokens for longer sessions.
+  </Card>
+  <Card title="Audit Logs" icon="file-lines">
+    Enable JSON logging and ship to SIEM for security monitoring and compliance.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zero Trust Architecture" icon="shield" href="/infrastructure/zero-trust">
+    Understand the security principles behind Pomerium
+  </Card>
+  <Card title="Docker Compose Setup" icon="docker" href="/infrastructure/docker-compose">
+    Learn how Pomerium integrates with other services
+  </Card>
+</CardGroup>

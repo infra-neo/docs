@@ -1,0 +1,310 @@
+---
+title: Local Authentication
+description: JWT-based local authentication with register and login endpoints
+---
+
+NeoSC's local authentication provides a straightforward email/password authentication system using JWT tokens and secure password hashing.
+
+## Overview
+
+Local authentication implements:
+- SHA-256 password hashing
+- Secure token generation with `secrets.token_urlsafe(32)`
+- Session management with MongoDB
+- Automatic audit logging for all auth events
+- MFA enforcement by default
+
+## Registration Flow
+
+### Register Endpoint
+
+```http
+POST /api/auth/register
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secure_password",
+  "name": "John Doe",
+  "organization": "Acme Corp"  // Optional, defaults to "Default Organization"
+}
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "vTxZ9pKmQ3wLrB5nC8dF2hG6jM4sP7tY1uX0aE3bH9",
+  "token_type": "bearer",
+  "user": {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "organization": "Acme Corp",
+    "role": "user",
+    "mfa_enabled": true
+  }
+}
+```
+
+### Registration Process
+
+<Steps>
+  <Step title="Email Validation">
+    System checks if the email is already registered. Returns 400 error if email exists.
+  </Step>
+  <Step title="User Creation">
+    Creates a new user with:
+    - Unique UUID
+    - Hashed password (SHA-256)
+    - Default role: `user`
+    - MFA enabled by default
+    - Timestamp of creation
+  </Step>
+  <Step title="Token Generation">
+    Generates a secure access token using `secrets.token_urlsafe(32)`
+  </Step>
+  <Step title="Audit Log">
+    Creates an audit log entry for the registration event
+  </Step>
+  <Step title="Response">
+    Returns the access token and user profile
+  </Step>
+</Steps>
+
+## Login Flow
+
+### Login Endpoint
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "email": "user@example.com",
+  "password": "secure_password"
+}
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "vTxZ9pKmQ3wLrB5nC8dF2hG6jM4sP7tY1uX0aE3bH9",
+  "token_type": "bearer",
+  "user": {
+    "id": "123e4567-e89b-12d3-a456-426614174000",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "organization": "Acme Corp",
+    "role": "user",
+    "mfa_enabled": true
+  }
+}
+```
+
+### Authentication Process
+
+<Steps>
+  <Step title="Credential Validation">
+    Verifies email exists and password hash matches stored hash
+  </Step>
+  <Step title="Session Creation">
+    Generates new access token and stores in active session store
+  </Step>
+  <Step title="Audit Logging">
+    Records login event with user ID, email, and timestamp
+  </Step>
+  <Step title="Token Response">
+    Returns bearer token and complete user profile
+  </Step>
+</Steps>
+
+## Using the Access Token
+
+Include the access token in all subsequent API requests:
+
+```http
+GET /api/auth/me
+Authorization: Bearer vTxZ9pKmQ3wLrB5nC8dF2hG6jM4sP7tY1uX0aE3bH9
+```
+
+**Frontend Example (JavaScript):**
+
+```javascript
+const response = await fetch('https://api.neosc.com/api/workspaces', {
+  headers: {
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': 'application/json'
+  }
+});
+```
+
+## Logout
+
+### Logout Endpoint
+
+```http
+POST /api/auth/logout
+Authorization: Bearer vTxZ9pKmQ3wLrB5nC8dF2hG6jM4sP7tY1uX0aE3bH9
+```
+
+**Response:**
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+Logout process:
+1. Extracts token from Authorization header
+2. Removes token from active session store
+3. Creates audit log entry
+4. Returns success message
+
+## Get Current User
+
+Retrieve the authenticated user's profile:
+
+```http
+GET /api/auth/me
+Authorization: Bearer vTxZ9pKmQ3wLrB5nC8dF2hG6jM4sP7tY1uX0aE3bH9
+```
+
+**Response:**
+
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "organization": "Acme Corp",
+  "role": "user",
+  "mfa_enabled": true
+}
+```
+
+## Password Security
+
+NeoSC uses SHA-256 hashing for password storage:
+
+```python
+import hashlib
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+```
+
+<Warning>
+  Passwords are never stored in plain text. Only the SHA-256 hash is persisted to the database.
+</Warning>
+
+## Error Handling
+
+### Common Errors
+
+**Email Already Registered (400):**
+
+```json
+{
+  "detail": "Email already registered"
+}
+```
+
+**Invalid Credentials (401):**
+
+```json
+{
+  "detail": "Invalid credentials"
+}
+```
+
+**Not Authenticated (401):**
+
+```json
+{
+  "detail": "Not authenticated"
+}
+```
+
+**Invalid Token (401):**
+
+```json
+{
+  "detail": "Invalid token"
+}
+```
+
+## Frontend Integration
+
+### Complete Login Example
+
+```javascript
+async function login(email, password) {
+  try {
+    const response = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ email, password })
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail);
+    }
+
+    const { access_token, user } = await response.json();
+    
+    // Store token securely
+    localStorage.setItem('access_token', access_token);
+    localStorage.setItem('user', JSON.stringify(user));
+    
+    return { token: access_token, user };
+  } catch (error) {
+    console.error('Login failed:', error);
+    throw error;
+  }
+}
+```
+
+## Security Considerations
+
+<AccordionGroup>
+  <Accordion title="Token Storage">
+    Store access tokens securely in localStorage or sessionStorage. Never store tokens in cookies without proper security flags.
+  </Accordion>
+  
+  <Accordion title="HTTPS Only">
+    Always use HTTPS in production to protect tokens during transmission.
+  </Accordion>
+  
+  <Accordion title="Token Expiration">
+    Implement token refresh mechanisms for long-lived sessions. Current implementation uses in-memory token store.
+  </Accordion>
+  
+  <Accordion title="Password Requirements">
+    Enforce strong password policies on the client side before submission.
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+For complete API documentation, see:
+
+<Card title="Authentication API" icon="code" href="/api/authentication">
+  Full API reference for all authentication endpoints
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zitadel SSO" icon="right-to-bracket" href="/authentication/zitadel-sso">
+    Set up enterprise SSO with Zitadel
+  </Card>
+  <Card title="MFA Configuration" icon="mobile" href="/authentication/mfa">
+    Configure multi-factor authentication
+  </Card>
+</CardGroup>

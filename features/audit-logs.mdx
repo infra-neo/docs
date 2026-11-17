@@ -1,0 +1,643 @@
+---
+title: Audit Logs
+description: Comprehensive audit logging system for tracking user actions, security events, and compliance monitoring
+---
+
+## Overview
+
+Audit logs provide a complete, immutable record of all system activities in NeoSC. Every user action, security event, and resource change is tracked with timestamps, IP addresses, and detailed context for compliance and security monitoring.
+
+## Audit Log Model
+
+Each audit log entry captures comprehensive event information:
+
+```python backend/server.py:93
+class AuditLog(BaseModel):
+    id: str                    # Unique log entry identifier
+    user_id: str              # User who performed the action
+    user_email: str           # User email address
+    action: str               # Action type (login, launch_workspace, etc.)
+    resource: str             # Resource affected (workspace:ws-123, policy:pol-456)
+    details: str              # Human-readable action description
+    ip_address: str           # Source IP address
+    timestamp: datetime       # When the action occurred
+    success: bool = True      # Whether the action succeeded
+```
+
+## Tracked Actions
+
+NeoSC automatically logs the following action types:
+
+### Authentication Events
+
+<AccordionGroup>
+  <Accordion title="register" icon="user-plus">
+    User account registration
+    
+    ```json
+    {
+      "action": "register",
+      "resource": "auth",
+      "details": "User registered successfully"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="login" icon="log-in">
+    Successful user login (local or SSO)
+    
+    ```json
+    {
+      "action": "login",
+      "resource": "auth",
+      "details": "User logged in successfully"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="sso_login" icon="key">
+    SSO authentication via Zitadel
+    
+    ```json
+    {
+      "action": "sso_login",
+      "resource": "auth",
+      "details": "SSO login via zitadel as admin"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="logout" icon="log-out">
+    User logout event
+    
+    ```json
+    {
+      "action": "logout",
+      "resource": "auth",
+      "details": "User logged out"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Workspace Events
+
+<AccordionGroup>
+  <Accordion title="launch_workspace" icon="play">
+    Workspace launch and session creation
+    
+    ```json
+    {
+      "action": "launch_workspace",
+      "resource": "workspace:ws-sap-neogenesys",
+      "details": "Launched SAP Neogénesys"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="stop_workspace" icon="square">
+    Workspace stop and session termination
+    
+    ```json
+    {
+      "action": "stop_workspace",
+      "resource": "workspace:ws-sap-neogenesys",
+      "details": "Workspace stopped"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="create_workspace" icon="plus">
+    New workspace creation (admin only)
+    
+    ```json
+    {
+      "action": "create_workspace",
+      "resource": "workspace:ws-custom-123",
+      "details": "Created workspace: Development Environment"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="update_workspace" icon="edit">
+    Workspace configuration changes
+    
+    ```json
+    {
+      "action": "update_workspace",
+      "resource": "workspace:ws-sap-neogenesys",
+      "details": "Updated workspace: {cpu: '8 vCPU', memory: '16 GB'}"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="delete_workspace" icon="trash">
+    Workspace deletion
+    
+    ```json
+    {
+      "action": "delete_workspace",
+      "resource": "workspace:ws-old-123",
+      "details": "Workspace deleted"
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="reset_workspaces" icon="refresh-cw">
+    Reset all workspaces to defaults
+    
+    ```json
+    {
+      "action": "reset_workspaces",
+      "resource": "workspaces",
+      "details": "Reset to default workspaces"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Session Events
+
+<AccordionGroup>
+  <Accordion title="disconnect_session" icon="x-circle">
+    Session disconnection by user
+    
+    ```json
+    {
+      "action": "disconnect_session",
+      "resource": "session:550e8400-e29b-41d4",
+      "details": "Session disconnected"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Policy Events
+
+<AccordionGroup>
+  <Accordion title="toggle_policy" icon="shield">
+    Security policy enabled/disabled
+    
+    ```json
+    {
+      "action": "toggle_policy",
+      "resource": "policy:pol-mfa-required",
+      "details": "Policy disabled"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Retrieving Audit Logs
+
+Fetch audit logs for the authenticated user:
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.neosc.com/api/audit-logs" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```javascript JavaScript
+const response = await axios.get(`${API}/audit-logs`, {
+  headers: { Authorization: `Bearer ${token}` }
+});
+
+const logs = response.data;
+```
+
+```python Python
+response = requests.get(
+    "https://api.neosc.com/api/audit-logs",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+logs = response.json()
+```
+</CodeGroup>
+
+### Access Control
+
+```python backend/server.py:739
+@api_router.get("/audit-logs")
+async def get_audit_logs(user: dict = Depends(get_current_user)):
+    # Admins can see all logs, users see only their own
+    query = {} if user.get('role') == 'admin' else {"user_id": user['id']}
+    
+    logs = await db.audit_logs.find(query, {"_id": 0})
+        .sort("timestamp", -1)
+        .to_list(500)
+    
+    return logs
+```
+
+<Info>
+**Admin users** can view all audit logs across the organization. **Regular users** can only view their own activity logs.
+</Info>
+
+### Response Example
+
+```json
+[
+  {
+    "id": "log-550e8400-e29b-41d4",
+    "user_id": "user-123",
+    "user_email": "john@neogenesys.com",
+    "action": "launch_workspace",
+    "resource": "workspace:ws-sap-neogenesys",
+    "details": "Launched SAP Neogénesys",
+    "ip_address": "192.168.1.100",
+    "timestamp": "2026-03-05T14:30:00Z",
+    "success": true
+  },
+  {
+    "id": "log-660f9511-f39c-52e5",
+    "user_id": "user-123",
+    "user_email": "john@neogenesys.com",
+    "action": "login",
+    "resource": "auth",
+    "details": "User logged in successfully",
+    "ip_address": "192.168.1.100",
+    "timestamp": "2026-03-05T14:25:00Z",
+    "success": true
+  }
+]
+```
+
+## Creating Audit Logs
+
+Audit logs are created automatically throughout the system:
+
+```python backend/server.py:726
+async def create_audit_log(
+    user_id: str, 
+    user_email: str, 
+    action: str, 
+    resource: str, 
+    details: str, 
+    success: bool = True
+):
+    log = AuditLog(
+        user_id=user_id,
+        user_email=user_email,
+        action=action,
+        resource=resource,
+        details=details,
+        success=success
+    )
+    
+    log_doc = log.model_dump()
+    log_doc['timestamp'] = log_doc['timestamp'].isoformat()
+    
+    await db.audit_logs.insert_one(log_doc)
+```
+
+### Example: Workspace Launch
+
+```python backend/server.py:642
+@api_router.post("/workspaces/{workspace_id}/launch")
+async def launch_workspace(workspace_id: str, user: dict = Depends(get_current_user)):
+    # ... launch workspace logic
+    
+    # Create audit log
+    await create_audit_log(
+        user['id'], 
+        user['email'], 
+        "launch_workspace", 
+        f"workspace:{workspace_id}", 
+        f"Launched {workspace['name']}"
+    )
+    
+    return {"session_id": session.id, ...}
+```
+
+### Example: Policy Toggle
+
+```python backend/server.py:814
+@api_router.patch("/policies/{policy_id}")
+async def toggle_policy(policy_id: str, user: dict = Depends(get_current_user)):
+    new_status = not policy.get('enabled', True)
+    await db.policies.update_one({"id": policy_id}, {"$set": {"enabled": new_status}})
+    
+    await create_audit_log(
+        user['id'], 
+        user['email'], 
+        "toggle_policy",
+        f"policy:{policy_id}", 
+        f"Policy {'enabled' if new_status else 'disabled'}"
+    )
+```
+
+## Audit Log UI
+
+The frontend displays audit logs in a sortable, filterable table:
+
+```jsx frontend/src/pages/AuditLogsPage.jsx:74
+<table className="data-table">
+  <thead>
+    <tr>
+      <th>Timestamp</th>
+      <th>User</th>
+      <th>Action</th>
+      <th>Resource</th>
+      <th>Details</th>
+      <th>IP Address</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {logs.map((log) => {
+      const ActionIcon = getActionIcon(log.action);
+      
+      return (
+        <tr key={log.id}>
+          <td className="mono text-xs">
+            {new Date(log.timestamp).toLocaleString()}
+          </td>
+          <td>{log.user_email}</td>
+          <td>
+            <div className="flex items-center gap-2">
+              <ActionIcon className="w-4 h-4" />
+              <span className="capitalize">
+                {log.action.replace(/_/g, ' ')}
+              </span>
+            </div>
+          </td>
+          <td className="mono text-xs">{log.resource}</td>
+          <td className="truncate max-w-[200px]">{log.details}</td>
+          <td className="mono text-xs">{log.ip_address}</td>
+          <td>
+            {log.success ? (
+              <Badge variant="outline" className="bg-green-500/10 text-green-400">
+                <CheckCircle className="w-3 h-3 mr-1" />
+                Success
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="bg-red-500/10 text-red-400">
+                <XCircle className="w-3 h-3 mr-1" />
+                Failed
+              </Badge>
+            )}
+          </td>
+        </tr>
+      );
+    })}
+  </tbody>
+</table>
+```
+
+### Action Icons
+
+```javascript frontend/src/pages/AuditLogsPage.jsx:21
+const actionIcons = {
+  login: LogIn,
+  logout: LogOut,
+  register: FileText,
+  launch_workspace: Play,
+  stop_workspace: Square,
+  disconnect_session: XCircle,
+  toggle_policy: Settings,
+};
+
+const getActionIcon = (action) => {
+  return actionIcons[action] || FileText;
+};
+```
+
+## Failed Actions
+
+Audit logs track both successful and failed actions:
+
+```python Example: Failed Login
+await create_audit_log(
+    user_id="attempted-user-id",
+    user_email="attacker@example.com",
+    action="login",
+    resource="auth",
+    details="Invalid credentials",
+    success=False  # Mark as failed
+)
+```
+
+<Warning>
+Failed login attempts with `success: false` may indicate brute force attacks or unauthorized access attempts.
+</Warning>
+
+## Resource Identifiers
+
+The `resource` field uses a consistent naming scheme:
+
+| Resource Type | Format | Example |
+|---------------|--------|----------|
+| Workspace | `workspace:{id}` | `workspace:ws-sap-neogenesys` |
+| Session | `session:{id}` | `session:550e8400-e29b-41d4` |
+| Policy | `policy:{id}` | `policy:pol-mfa-required` |
+| Auth | `auth` | `auth` |
+| System | `workspaces`, `users`, etc. | `workspaces` |
+
+## Querying and Filtering
+
+### Filter by User (Admin)
+
+```python Query Example
+logs = await db.audit_logs.find(
+    {"user_email": "john@neogenesys.com"},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(100)
+```
+
+### Filter by Action
+
+```python Query Example
+logs = await db.audit_logs.find(
+    {"action": "launch_workspace"},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(100)
+```
+
+### Filter by Date Range
+
+```python Query Example
+from datetime import datetime, timedelta
+
+start_date = datetime.now(timezone.utc) - timedelta(days=7)
+logs = await db.audit_logs.find(
+    {"timestamp": {"$gte": start_date.isoformat()}},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(500)
+```
+
+### Filter by Success Status
+
+```python Query Failed Actions
+logs = await db.audit_logs.find(
+    {"success": False},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(100)
+```
+
+## Compliance Use Cases
+
+### SOC 2 Compliance
+
+<Steps>
+  <Step title="Access Monitoring">
+    Track all user authentication and authorization events
+  </Step>
+  <Step title="Change Management">
+    Log all configuration and policy changes with user attribution
+  </Step>
+  <Step title="Audit Trail">
+    Maintain immutable logs with timestamps and IP addresses
+  </Step>
+  <Step title="Retention">
+    Store logs for minimum 90 days (configurable)
+  </Step>
+</Steps>
+
+### GDPR Compliance
+
+- **Right to Access**: Users can view their own audit logs
+- **Data Minimization**: Only necessary information is logged
+- **Purpose Limitation**: Logs are used solely for security and compliance
+- **Retention**: Configurable retention periods with automatic deletion
+
+### HIPAA Compliance
+
+- **Access Logs**: Track all access to protected resources
+- **User Attribution**: Every action is tied to a specific user
+- **Integrity Controls**: Immutable logs prevent tampering
+- **Audit Reports**: Generate compliance reports from logs
+
+## Retention and Archival
+
+Configure log retention policies:
+
+```python Retention Example
+retention_days = 90  # SOC 2 minimum
+cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+
+# Archive old logs before deletion
+old_logs = await db.audit_logs.find(
+    {"timestamp": {"$lt": cutoff_date.isoformat()}}
+).to_list(10000)
+
+# Export to cold storage (S3, etc.)
+await archive_logs_to_s3(old_logs)
+
+# Delete from active database
+await db.audit_logs.delete_many(
+    {"timestamp": {"$lt": cutoff_date.isoformat()}}
+)
+```
+
+## Security Incident Investigation
+
+Use audit logs to investigate security incidents:
+
+```python Investigation Example
+# Find all actions by suspicious user
+suspicious_activity = await db.audit_logs.find(
+    {"user_email": "suspicious@example.com"},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(1000)
+
+# Find failed login attempts
+failed_logins = await db.audit_logs.find(
+    {"action": "login", "success": False},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(100)
+
+# Find actions from unusual IP
+unusual_ip = await db.audit_logs.find(
+    {"ip_address": "suspicious.ip.address"},
+    {"_id": 0}
+).sort("timestamp", -1).to_list(100)
+```
+
+## Export and Reporting
+
+### CSV Export
+
+```python Export to CSV
+import csv
+from io import StringIO
+
+logs = await db.audit_logs.find({}, {"_id": 0}).to_list(10000)
+
+output = StringIO()
+writer = csv.DictWriter(output, fieldnames=logs[0].keys())
+writer.writeheader()
+writer.writerows(logs)
+
+return output.getvalue()
+```
+
+### SIEM Integration
+
+Forward logs to SIEM systems (Splunk, ELK, etc.):
+
+```python SIEM Forward Example
+import asyncio
+import aiohttp
+
+async def forward_to_siem(log_entry):
+    async with aiohttp.ClientSession() as session:
+        await session.post(
+            "https://siem.example.com/ingest",
+            json=log_entry,
+            headers={"Authorization": f"Bearer {SIEM_TOKEN}"}
+        )
+
+# Forward logs in real-time
+await forward_to_siem(log_doc)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Logging Strategy">
+    - Log all security-relevant events
+    - Include sufficient context in `details` field
+    - Use consistent resource naming conventions
+    - Mark failed actions with `success: false`
+  </Accordion>
+  
+  <Accordion title="Data Protection">
+    - Never log passwords or sensitive credentials
+    - Hash or redact PII where possible
+    - Encrypt logs at rest and in transit
+    - Implement strict access controls
+  </Accordion>
+  
+  <Accordion title="Performance">
+    - Use async logging to avoid blocking
+    - Batch log writes for high-volume events
+    - Index timestamp and user_id fields
+    - Archive old logs to cold storage
+  </Accordion>
+  
+  <Accordion title="Monitoring">
+    - Set up alerts for failed login attempts
+    - Monitor unusual activity patterns
+    - Review admin actions regularly
+    - Generate weekly audit reports
+  </Accordion>
+</AccordionGroup>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Security Policies" icon="shield" href="/features/security-policies">
+    Configure security rules and enforcement
+  </Card>
+  <Card title="Sessions" icon="clock" href="/features/sessions">
+    Session activity tracking
+  </Card>
+  <Card title="Workspaces" icon="desktop" href="/features/workspaces">
+    Workspace usage monitoring
+  </Card>
+  <Card title="Organizations" icon="building" href="/features/organizations">
+    Organization-level audit trails
+  </Card>
+</CardGroup>

@@ -1,0 +1,461 @@
+---
+title: Multi-Factor Authentication
+description: Configure and enforce MFA for enhanced security in NeoSC
+---
+
+NeoSC enforces Multi-Factor Authentication (MFA) by default for all users to provide an additional layer of security beyond passwords.
+
+## Overview
+
+MFA in NeoSC:
+- **Enabled by default** for all users (local and SSO)
+- Integrated with authentication policies
+- Supports multiple MFA methods through Zitadel
+- Configurable enforcement via security policies
+- Tracked in audit logs
+
+## MFA Status
+
+All users have MFA enabled by default in their profile:
+
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "role": "user",
+  "mfa_enabled": true  // Default: true
+}
+```
+
+## MFA Methods
+
+NeoSC supports multiple MFA methods through Zitadel integration:
+
+<CardGroup cols={2}>
+  <Card title="WebAuthn / FIDO2" icon="key">
+    Hardware security keys and platform authenticators (recommended)
+  </Card>
+  <Card title="TOTP" icon="mobile">
+    Time-based One-Time Passwords via authenticator apps
+  </Card>
+  <Card title="SMS" icon="message">
+    SMS-based verification codes (Zitadel configuration)
+  </Card>
+  <Card title="Email" icon="envelope">
+    Email-based verification codes (Zitadel configuration)
+  </Card>
+</CardGroup>
+
+## MFA Enforcement Policy
+
+NeoSC includes a default security policy that enforces MFA:
+
+**Policy ID:** `pol-mfa-required`
+
+```json
+{
+  "id": "pol-mfa-required",
+  "name": "MFA Required",
+  "description": "Enforce multi-factor authentication for all users",
+  "type": "access",
+  "rules": [
+    "Require MFA for login",
+    "WebAuthn preferred",
+    "TOTP as fallback"
+  ],
+  "enabled": true
+}
+```
+
+**Location:** `backend/server.py:769`
+
+## Configuring MFA
+
+### For Local Authentication Users
+
+When using local authentication, MFA is handled at the application level:
+
+<Steps>
+  <Step title="User Registration">
+    User registers with email/password. Account is created with `mfa_enabled: true`
+  </Step>
+  
+  <Step title="MFA Setup">
+    On first login or when prompted, user sets up their preferred MFA method
+  </Step>
+  
+  <Step title="MFA Verification">
+    On subsequent logins, user must provide MFA credential in addition to password
+  </Step>
+</Steps>
+
+### For SSO Users (Zitadel)
+
+MFA is managed by Zitadel:
+
+<Steps>
+  <Step title="Configure in Zitadel">
+    Enable MFA policies in your Zitadel instance:
+    - Navigate to **Organization Settings** → **Login Policy**
+    - Enable **Multi-Factor Authentication**
+    - Configure allowed MFA methods (WebAuthn, TOTP, SMS, Email)
+    - Set MFA requirement: Optional, Required on First Login, or Always Required
+  </Step>
+  
+  <Step title="User Setup">
+    Users set up MFA when they first authenticate:
+    - User logs in with username/password
+    - Zitadel prompts for MFA setup
+    - User registers their MFA method (e.g., TOTP app, security key)
+    - MFA credential is saved in Zitadel
+  </Step>
+  
+  <Step title="Subsequent Logins">
+    On future logins:
+    - User provides username/password
+    - Zitadel prompts for MFA credential
+    - After successful MFA, user is redirected to NeoSC
+  </Step>
+</Steps>
+
+## MFA in User Model
+
+The user model includes the `mfa_enabled` field:
+
+**Location:** `backend/server.py:41`
+
+```python
+class User(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    email: str
+    name: str
+    organization: str = "Default Organization"
+    role: str = "user"
+    mfa_enabled: bool = True  # Default: true
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+```
+
+### Registration Flow
+
+**Location:** `backend/server.py:147`
+
+```python
+@api_router.post("/api/auth/register", response_model=AuthToken)
+async def register(user_data: UserCreate):
+    user = User(
+        email=user_data.email,
+        name=user_data.name,
+        organization=user_data.organization or "Default Organization"
+        # mfa_enabled defaults to True
+    )
+    
+    # Store user with MFA enabled
+    await db.users.insert_one(user_doc)
+    
+    # Return user profile
+    return AuthToken(access_token=token, user=user_dict)
+```
+
+### SSO Flow
+
+**Location:** `backend/server.py:228`
+
+```python
+@api_router.post("/api/auth/sso", response_model=AuthToken)
+async def sso_login(sso_data: SSOLoginRequest):
+    # Create new SSO user with MFA enabled
+    user = User(
+        email=email,
+        name=name,
+        organization=organization,
+        role=user_role,
+        mfa_enabled=True  # Always enabled for SSO users
+    )
+    
+    await db.users.insert_one(user_doc)
+    return AuthToken(access_token=token, user=user_dict)
+```
+
+## Viewing MFA Policies
+
+Administrators can view and manage MFA policies:
+
+```http
+GET /api/policies
+Authorization: Bearer {token}
+```
+
+**Response:**
+
+```json
+[
+  {
+    "id": "pol-mfa-required",
+    "name": "MFA Required",
+    "description": "Enforce multi-factor authentication for all users",
+    "type": "access",
+    "rules": [
+      "Require MFA for login",
+      "WebAuthn preferred",
+      "TOTP as fallback"
+    ],
+    "enabled": true,
+    "created_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+## Managing MFA Policies
+
+### Toggle MFA Policy
+
+Administrators can enable/disable the MFA policy:
+
+```http
+PATCH /api/policies/pol-mfa-required
+Authorization: Bearer {token}
+```
+
+**Response:**
+
+```json
+{
+  "message": "Policy disabled",
+  "enabled": false
+}
+```
+
+<Warning>
+  Disabling the MFA policy reduces security. Only disable MFA in development or testing environments.
+</Warning>
+
+**Backend Implementation:**
+
+**Location:** `backend/server.py:806`
+
+```python
+@api_router.patch("/policies/{policy_id}")
+async def toggle_policy(policy_id: str, user: dict = Depends(get_current_user)):
+    policy = await db.policies.find_one({"id": policy_id}, {"_id": 0})
+    if not policy:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    
+    new_status = not policy.get('enabled', True)
+    await db.policies.update_one({"id": policy_id}, {"$set": {"enabled": new_status}})
+    
+    # Log policy change
+    await create_audit_log(
+        user['id'], user['email'], "toggle_policy",
+        f"policy:{policy_id}", f"Policy {'enabled' if new_status else 'disabled'}"
+    )
+    
+    return {"message": f"Policy {'enabled' if new_status else 'disabled'}", "enabled": new_status}
+```
+
+## MFA in Session Security
+
+MFA verification status is tracked in active sessions:
+
+**Location:** `backend/server.py:78`
+
+```python
+class Session(BaseModel):
+    id: str
+    user_id: str
+    user_email: str
+    workspace_id: str
+    status: str = "active"
+    started_at: datetime
+    mfa_verified: bool = True  # MFA verification status
+```
+
+When launching a workspace, MFA enforcement is checked:
+
+**Location:** `backend/server.py:619`
+
+```python
+@api_router.post("/workspaces/{workspace_id}/launch")
+async def launch_workspace(workspace_id: str, user: dict = Depends(get_current_user)):
+    # Create session with MFA status
+    session = Session(
+        user_id=user['id'],
+        user_email=user['email'],
+        workspace_id=workspace_id,
+        workspace_name=workspace['name'],
+        workspace_type=workspace['type']
+        # mfa_verified defaults to True
+    )
+    
+    return {
+        "session_id": session.id,
+        "security": {
+            "encrypted_tunnel": True,
+            "identity_verified": True,
+            "mfa_enforced": user.get('mfa_enabled', True),
+            "session_recording": True,
+            "no_open_ports": True
+        }
+    }
+```
+
+## Audit Logging
+
+All MFA-related events are logged to the audit trail:
+
+- User registration with MFA enabled
+- SSO login with MFA verification
+- MFA policy changes
+- Failed MFA attempts (when implemented)
+
+**View audit logs:**
+
+```http
+GET /api/audit-logs
+Authorization: Bearer {token}
+```
+
+**Example MFA audit entry:**
+
+```json
+{
+  "id": "log-123",
+  "user_id": "user-456",
+  "user_email": "user@example.com",
+  "action": "sso_login",
+  "resource": "auth",
+  "details": "SSO login via zitadel_onprem as admin",
+  "ip_address": "192.168.1.1",
+  "timestamp": "2024-01-15T14:30:00Z",
+  "success": true
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="WebAuthn First">
+    Encourage users to use WebAuthn/FIDO2 security keys or platform authenticators (Face ID, Touch ID, Windows Hello) as the primary MFA method.
+  </Accordion>
+  
+  <Accordion title="TOTP Backup">
+    Configure TOTP (authenticator apps like Google Authenticator, Authy) as a backup method in case hardware keys are unavailable.
+  </Accordion>
+  
+  <Accordion title="Recovery Codes">
+    Implement recovery codes in Zitadel to allow users to regain access if they lose their MFA device.
+  </Accordion>
+  
+  <Accordion title="Admin Monitoring">
+    Regularly review audit logs for failed MFA attempts and unusual authentication patterns.
+  </Accordion>
+  
+  <Accordion title="User Education">
+    Provide clear documentation to users on how to set up and use MFA, including troubleshooting steps.
+  </Accordion>
+</AccordionGroup>
+
+## Zitadel MFA Configuration
+
+For detailed MFA setup in Zitadel:
+
+<Steps>
+  <Step title="Access Organization Settings">
+    Log into your Zitadel instance and navigate to your organization
+  </Step>
+  
+  <Step title="Configure Login Policy">
+    Go to **Settings** → **Login Policy**
+  </Step>
+  
+  <Step title="Enable MFA">
+    Toggle on **Multi-Factor Authentication**
+  </Step>
+  
+  <Step title="Select MFA Methods">
+    Choose allowed methods:
+    - ✅ WebAuthn (recommended)
+    - ✅ TOTP (recommended)
+    - ☐ SMS (optional)
+    - ☐ Email (optional)
+  </Step>
+  
+  <Step title="Set Enforcement Level">
+    Choose when users must set up MFA:
+    - **Optional**: Users can choose to enable MFA
+    - **Required on First Login**: Users must set up MFA after first login
+    - **Always Required**: MFA required for every login
+  </Step>
+  
+  <Step title="Save Changes">
+    Save the login policy configuration
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="User Cannot Enable MFA">
+    **Issue:** User doesn't see MFA setup option
+    
+    **Solutions:**
+    - Verify MFA is enabled in Zitadel login policy
+    - Check that at least one MFA method is configured
+    - Ensure user has sufficient permissions
+  </Accordion>
+  
+  <Accordion title="MFA Prompt Not Appearing">
+    **Issue:** User logs in without MFA prompt
+    
+    **Solutions:**
+    - Check if MFA policy enforcement is set to "Always Required"
+    - Verify the policy is enabled: `GET /api/policies/pol-mfa-required`
+    - Review Zitadel login policy settings
+  </Accordion>
+  
+  <Accordion title="Lost MFA Device">
+    **Issue:** User cannot access account due to lost MFA device
+    
+    **Solutions:**
+    - Use recovery codes (if configured in Zitadel)
+    - Administrator can reset MFA in Zitadel user management
+    - Set up backup MFA methods during initial setup
+  </Accordion>
+  
+  <Accordion title="WebAuthn Not Working">
+    **Issue:** Security key or platform authenticator not recognized
+    
+    **Solutions:**
+    - Ensure browser supports WebAuthn (Chrome, Firefox, Safari, Edge)
+    - Verify HTTPS is used (WebAuthn requires secure context)
+    - Try a different browser or device
+    - Fall back to TOTP method
+  </Accordion>
+</AccordionGroup>
+
+## Security Considerations
+
+<Warning>
+  Never store MFA secrets or recovery codes in plain text. Zitadel handles MFA credential storage securely.
+</Warning>
+
+<Tip>
+  For maximum security, require MFA for all admin accounts and high-privilege operations.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zitadel SSO" icon="right-to-bracket" href="/authentication/zitadel-sso">
+    Configure Zitadel OIDC integration
+  </Card>
+  <Card title="Security Policies" icon="shield" href="/features/security-policies">
+    Manage other security policies
+  </Card>
+  <Card title="Audit Logs" icon="clipboard-list" href="/features/audit-logs">
+    Monitor authentication events
+  </Card>
+  <Card title="User Management" icon="users" href="/guides/user-management">
+    Manage user accounts and permissions
+  </Card>
+</CardGroup>

@@ -1,0 +1,168 @@
+---
+title: Introduction to NeoSC
+description: A Zero Trust VDI platform that provides secure, isolated cloud desktop environments with enterprise-grade authentication and network security
+---
+
+# Introduction to NeoSC
+
+NeoSC (Neogenesys Secure Connect) is a Cloud VDI SaaS platform built on Zero Trust architecture principles. It enables organizations to provide secure, isolated workspace environments with comprehensive identity verification, encrypted tunneling, and granular access control.
+
+## What is NeoSC?
+
+NeoSC is a modern Virtual Desktop Infrastructure (VDI) platform that combines:
+
+- **Zero Trust Network Access** - No implicit trust, verify every connection
+- **Enterprise SSO** - Seamless authentication via Zitadel OIDC
+- **Encrypted Tunnels** - WireGuard-based secure connections via NetBird
+- **Cloud Workspaces** - On-demand Linux, Windows, and browser environments
+- **Session Management** - Complete audit trail and compliance controls
+
+<Note>
+NeoSC is designed for enterprises that need secure remote access to applications and desktops without exposing internal infrastructure to the internet.
+</Note>
+
+## Key Benefits
+
+<CardGroup cols={2}>
+  <Card title="Zero Trust Security" icon="shield-check">
+    Every connection is authenticated, authorized, and encrypted. No open ports, no VPNs, no trust by default.
+  </Card>
+  
+  <Card title="Instant Provisioning" icon="bolt">
+    Launch secure workspaces in seconds. Pre-configured environments ready for SAP, development, or secure browsing.
+  </Card>
+  
+  <Card title="Complete Audit Trail" icon="clipboard-list">
+    Every action is logged with user identity, timestamp, and IP address for compliance requirements.
+  </Card>
+  
+  <Card title="Multi-Factor Authentication" icon="key">
+    Enforced MFA via Zitadel with WebAuthn, TOTP, and SSO integration.
+  </Card>
+</CardGroup>
+
+## Core Components
+
+NeoSC is built on industry-standard open source technologies:
+
+### Authentication Layer
+- **Zitadel** - Identity provider with OIDC/SAML support
+- **Pomerium** - Zero Trust reverse proxy with context-aware policies
+- Multi-provider SSO (on-premise and cloud)
+
+### Network Layer
+- **NetBird** - WireGuard-based mesh VPN (visual integration)
+- Encrypted peer-to-peer tunnels
+- Dynamic access control lists
+
+### Application Layer
+- **FastAPI Backend** - Python-based REST API
+- **React Frontend** - Modern SPA with Tailwind CSS and shadcn/ui
+- **MongoDB** - Document storage for sessions and audit logs
+
+### Infrastructure Layer
+- **Docker** - Containerized workspace environments
+- **Pomerium Proxy** - Secure gateway for all services
+- **HTTPS/TLS** - End-to-end encryption
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Secure SAP Access">
+    Access SAP environments via TSPlus HTML5 Desktop through encrypted NetBird tunnels. No direct internet exposure of SAP infrastructure.
+  </Accordion>
+  
+  <Accordion title="Development Environments">
+    Provide developers with isolated Linux desktops pre-configured with tools, access controlled by team membership.
+  </Accordion>
+  
+  <Accordion title="Contractor Access">
+    Grant temporary access to specific applications for contractors without VPN credentials or network access.
+  </Accordion>
+  
+  <Accordion title="Secure Browsing">
+    Isolated browser environments for accessing untrusted websites or handling sensitive data.
+  </Accordion>
+  
+  <Accordion title="Administrative Tools">
+    Give administrators access to infrastructure management panels (1Panel, monitoring) with MFA and session recording.
+  </Accordion>
+</AccordionGroup>
+
+## Security Features
+
+NeoSC implements defense-in-depth security:
+
+- **Identity Verification** - Every user authenticated via Zitadel OIDC
+- **Encrypted Tunnels** - WireGuard VPN with perfect forward secrecy
+- **No Open Ports** - All services behind Pomerium proxy
+- **Session Recording** - Audit trail of all workspace activity
+- **MFA Enforcement** - Mandatory multi-factor authentication
+- **Role-Based Access** - Granular permissions via Zitadel roles
+- **Automatic Cleanup** - Expired sessions terminated automatically
+
+<Warning>
+NeoSC requires proper DNS configuration and SSL/TLS certificates. See the [Quickstart Guide](/quickstart) for setup instructions.
+</Warning>
+
+## Compliance & Standards
+
+NeoSC is designed to support:
+
+- **SOC 2** - Comprehensive audit logging and access controls
+- **GDPR** - Data sovereignty and user privacy controls
+- **ISO 27001** - Information security management practices
+- **HIPAA** - Healthcare data protection (with proper configuration)
+
+## Architecture Philosophy
+
+NeoSC follows Zero Trust principles:
+
+1. **Never Trust, Always Verify** - No implicit trust based on network location
+2. **Assume Breach** - Minimize blast radius with least-privilege access
+3. **Verify Explicitly** - Authenticate and authorize every request
+4. **Use Least Privilege** - Grant minimal access required for the task
+
+## Who Should Use NeoSC?
+
+<CardGroup cols={2}>
+  <Card title="IT Administrators" icon="user-gear">
+    Manage workspace policies, monitor audit logs, configure organization settings, and enforce security policies.
+  </Card>
+  
+  <Card title="End Users" icon="user">
+    Launch cloud workspaces, access secure applications, manage active sessions, and connect to remote desktops.
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+```yaml
+Frontend:
+  - React 19
+  - Tailwind CSS
+  - shadcn/ui components
+  - react-oidc-context
+  - axios
+
+Backend:
+  - FastAPI (Python)
+  - Motor (async MongoDB)
+  - httpx (HTTP client)
+  - Pydantic (data validation)
+
+Infrastructure:
+  - Pomerium (Zero Trust proxy)
+  - Zitadel (Identity provider)
+  - NetBird (WireGuard mesh VPN)
+  - MongoDB 7
+  - Docker & Docker Compose
+```
+
+## Getting Started
+
+Ready to deploy NeoSC? Continue to the [Quickstart Guide](/quickstart) for step-by-step deployment instructions.
+
+<Card title="Next Steps" icon="arrow-right" href="/quickstart">
+  Follow the quickstart guide to deploy NeoSC in your environment
+</Card>

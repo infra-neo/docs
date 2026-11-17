@@ -1,0 +1,100 @@
+---
+title: Authentication Overview
+description: Understanding NeoSC's authentication options including local JWT-based auth and Zitadel SSO
+---
+
+NeoSC provides two authentication methods to securely access the platform:
+
+1. **Local Authentication** - JWT-based email/password authentication
+2. **SSO via Zitadel** - OIDC-based Single Sign-On with PKCE flow
+
+## Authentication Methods
+
+### Local Authentication
+
+Local authentication uses JWT tokens with email and password credentials. This method:
+- Stores user credentials securely with SHA-256 hashing
+- Generates secure access tokens using `secrets.token_urlsafe(32)`
+- Maintains user sessions in MongoDB
+- Enforces MFA by default for all users
+
+Best for:
+- Development and testing environments
+- Organizations without existing SSO infrastructure
+- Quick user onboarding
+
+### Zitadel SSO
+
+Zitadel OIDC integration provides enterprise-grade authentication with:
+- **Authorization Code Flow with PKCE** for secure authentication
+- Support for multiple identity providers (self-hosted and cloud)
+- Automatic role extraction from Zitadel claims
+- Integration with external identity providers (Google, etc.)
+
+Best for:
+- Production environments
+- Enterprise organizations with centralized identity management
+- Multi-provider authentication scenarios
+
+## Security Features
+
+All authentication methods in NeoSC include:
+
+<CardGroup cols={2}>
+  <Card title="MFA Enforcement" icon="shield-check">
+    Multi-factor authentication enabled by default for all users
+  </Card>
+  <Card title="Audit Logging" icon="clipboard-list">
+    All authentication events logged to audit trail
+  </Card>
+  <Card title="Session Management" icon="clock">
+    Secure session tracking with automatic expiration
+  </Card>
+  <Card title="Role-Based Access" icon="users">
+    Automatic role assignment based on identity provider claims
+  </Card>
+</CardGroup>
+
+## Provider Comparison
+
+| Feature | Local Auth | Zitadel SSO |
+|---------|-----------|-------------|
+| Setup Complexity | Low | Medium |
+| MFA Support | ✅ | ✅ |
+| External IdP | ❌ | ✅ |
+| Role Extraction | Manual | Automatic |
+| Centralized Management | ❌ | ✅ |
+| Production Ready | ✅ | ✅ |
+
+## Supported Zitadel Providers
+
+NeoSC supports multiple Zitadel instances:
+
+### On-Premise Provider
+- **Authority**: `manager.kappa4.com`
+- **Type**: Self-hosted Zitadel
+- **Authentication**: Email/Password, custom SSO configurations
+- **Use Case**: Organizations with on-premise infrastructure
+
+### Cloud Provider
+- **Authority**: `beyondcloud-nxm7ab.us1.zitadel.cloud`
+- **Type**: Zitadel Cloud (US1)
+- **Authentication**: Email/Password, Google SSO
+- **Use Case**: Cloud-first organizations, rapid deployment
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Local Authentication" icon="key" href="/authentication/local-auth">
+    Set up JWT-based local authentication
+  </Card>
+  <Card title="Zitadel SSO" icon="right-to-bracket" href="/authentication/zitadel-sso">
+    Configure OIDC SSO integration
+  </Card>
+  <Card title="MFA Configuration" icon="mobile" href="/authentication/mfa">
+    Configure multi-factor authentication
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    View authentication API endpoints
+  </Card>
+</CardGroup>

@@ -1,0 +1,556 @@
+---
+title: Zitadel SSO Integration
+description: Configure Zitadel OIDC SSO with PKCE flow for enterprise authentication
+---
+
+NeoSC integrates with Zitadel for enterprise-grade Single Sign-On using OpenID Connect (OIDC) with the Authorization Code Flow and PKCE.
+
+## Overview
+
+Zitadel SSO provides:
+- **Secure OIDC flow** with PKCE (Proof Key for Code Exchange)
+- **Multi-provider support** (self-hosted and cloud)
+- **Automatic role extraction** from Zitadel claims
+- **External IdP integration** (Google, etc.)
+- **Centralized user management**
+
+## Supported Providers
+
+NeoSC supports two Zitadel configurations:
+
+### Provider 1: Self-Hosted (On-Premise)
+
+```javascript
+{
+  authority: "https://manager.kappa4.com",
+  client_id: "360979728544301063",
+  project_id: "360327617871609860",
+  name: "NeoSC SAP SSO",
+  provider_key: "zitadel_onprem"
+}
+```
+
+**Redirect URIs:**
+- Callback: `https://neosc-vdi-preview.preview.emergentagent.com/auth/callback`
+- Post Logout: `https://neosc-vdi-preview.preview.emergentagent.com`
+
+**Scopes:**
+```
+openid
+profile
+email
+urn:zitadel:iam:org:project:id:360327617871609860:aud
+urn:zitadel:iam:org:projects:roles
+```
+
+### Provider 2: Zitadel Cloud
+
+```javascript
+{
+  authority: "https://beyondcloud-nxm7ab.us1.zitadel.cloud",
+  client_id: "360979499183035237",
+  project_id: "360845682363341210",
+  name: "Secure Connect by Neogenesys",
+  provider_key: "zitadel_cloud"
+}
+```
+
+**Redirect URIs:**
+- Callback: `https://neosc-vdi-preview.preview.emergentagent.com/auth/callback`
+- Post Logout: `https://neosc-vdi-preview.preview.emergentagent.com`
+
+**Scopes:**
+```
+openid
+profile
+email
+urn:zitadel:iam:org:project:id:360845682363341210:aud
+urn:zitadel:iam:org:projects:roles
+```
+
+## OIDC Authentication Flow
+
+<Steps>
+  <Step title="User Initiates Login">
+    User clicks SSO button in the NeoSC interface. Frontend generates:
+    - PKCE code verifier (random string)
+    - Code challenge (SHA-256 hash of verifier)
+    - State parameter for CSRF protection
+    
+    Stores in sessionStorage: `verifier`, `provider`, `authority`, `client_id`
+  </Step>
+  
+  <Step title="Redirect to Zitadel">
+    Browser redirects to Zitadel authorization endpoint:
+    
+    ```
+    GET {authority}/oauth/v2/authorize?
+      client_id={client_id}&
+      redirect_uri={redirect_uri}&
+      response_type=code&
+      scope=openid%20profile%20email%20...&
+      code_challenge={code_challenge}&
+      code_challenge_method=S256&
+      state={state}
+    ```
+  </Step>
+  
+  <Step title="User Authenticates">
+    User authenticates with Zitadel using:
+    - Email/Password (both providers)
+    - Google SSO (cloud provider)
+    - Custom IdP (on-premise provider)
+  </Step>
+  
+  <Step title="Authorization Code Callback">
+    Zitadel redirects back with authorization code:
+    
+    ```
+    https://neosc.com/auth/callback?code=XXX&state=YYY
+    ```
+  </Step>
+  
+  <Step title="Backend Token Exchange">
+    Frontend sends code to backend for token exchange:
+    
+    ```http
+    POST /api/auth/token-exchange
+    Content-Type: application/json
+    
+    {
+      "code": "XXX",
+      "code_verifier": "stored_verifier",
+      "redirect_uri": "https://neosc.com/auth/callback",
+      "provider": "zitadel_onprem"
+    }
+    ```
+  </Step>
+  
+  <Step title="Backend Exchanges Code">
+    Backend calls Zitadel token endpoint:
+    
+    ```http
+    POST {authority}/oauth/v2/token
+    Content-Type: application/x-www-form-urlencoded
+    
+    grant_type=authorization_code&
+    client_id={client_id}&
+    code={code}&
+    redirect_uri={redirect_uri}&
+    code_verifier={code_verifier}
+    ```
+    
+    Receives: `access_token`, `id_token`, `refresh_token`
+  </Step>
+  
+  <Step title="Fetch User Info">
+    Backend retrieves user profile from Zitadel:
+    
+    ```http
+    GET {authority}/oidc/v1/userinfo
+    Authorization: Bearer {access_token}
+    ```
+  </Step>
+  
+  <Step title="Extract Roles">
+    Backend parses roles from ID token claims:
+    
+    ```json
+    {
+      "urn:zitadel:iam:org:project:360327617871609860:roles": {
+        "admin": {},
+        "neosc": {}
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Create NeoSC Session">
+    Frontend calls SSO endpoint to create local session:
+    
+    ```http
+    POST /api/auth/sso
+    Content-Type: application/json
+    
+    {
+      "access_token": "zitadel_token",
+      "profile": {user_profile},
+      "roles": ["admin", "neosc"],
+      "groups": [],
+      "provider": "zitadel_onprem"
+    }
+    ```
+  </Step>
+  
+  <Step title="Redirect to Dashboard">
+    User is authenticated and redirected to NeoSC dashboard with:
+    - NeoSC access token
+    - User profile with extracted roles
+    - Session audit log entry
+  </Step>
+</Steps>
+
+## Token Exchange Endpoint
+
+Backend endpoint to exchange authorization code for tokens (avoids CORS issues):
+
+**Location:** `backend/server.py:335`
+
+```python
+@api_router.post("/api/auth/token-exchange")
+async def token_exchange(request: TokenExchangeRequest):
+    # Determine provider configuration
+    if request.provider == 'zitadel_cloud':
+        authority = ZITADEL_CLOUD_AUTHORITY
+        client_id = ZITADEL_CLOUD_CLIENT_ID
+        project_id = ZITADEL_CLOUD_PROJECT_ID
+    else:
+        authority = ZITADEL_AUTHORITY
+        client_id = ZITADEL_CLIENT_ID
+        project_id = ZITADEL_PROJECT_ID
+    
+    # Exchange code for tokens
+    token_response = await http_client.post(
+        f"{authority}/oauth/v2/token",
+        data={
+            'grant_type': 'authorization_code',
+            'client_id': client_id,
+            'code': request.code,
+            'redirect_uri': request.redirect_uri,
+            'code_verifier': request.code_verifier,
+        }
+    )
+    
+    # Get user info
+    userinfo = await http_client.get(
+        f"{authority}/oidc/v1/userinfo",
+        headers={'Authorization': f"Bearer {tokens['access_token']}"}
+    )
+    
+    # Extract roles from claims
+    role_claim_key = f"urn:zitadel:iam:org:project:{project_id}:roles"
+    roles = extract_roles(full_profile, role_claim_key)
+    
+    return {
+        'tokens': tokens,
+        'profile': full_profile,
+        'roles': roles,
+        'groups': groups,
+        'provider': request.provider
+    }
+```
+
+## SSO Login Endpoint
+
+Creates or updates user and generates NeoSC session token:
+
+**Location:** `backend/server.py:228`
+
+```python
+@api_router.post("/api/auth/sso", response_model=AuthToken)
+async def sso_login(sso_data: SSOLoginRequest):
+    # Extract user info from OIDC profile
+    email = profile.get('email') or profile.get('sub')
+    name = profile.get('name') or profile.get('given_name')
+    
+    # Determine role from Zitadel roles/groups
+    is_admin = any(
+        'admin' in r.lower() or 'administrator' in r.lower()
+        for r in sso_data.roles
+    )
+    user_role = 'admin' if is_admin else 'user'
+    
+    # Create or update user
+    if existing_user:
+        await db.users.update_one(
+            {"email": email},
+            {"$set": {
+                "sso_provider": sso_data.provider,
+                "role": user_role,
+                "roles": roles
+            }}
+        )
+    else:
+        user = User(
+            email=email,
+            name=name,
+            role=user_role,
+            mfa_enabled=True
+        )
+        await db.users.insert_one(user_doc)
+    
+    # Generate NeoSC token
+    token = generate_token()
+    active_tokens[token] = user_dict
+    
+    return AuthToken(access_token=token, user=user_dict)
+```
+
+## Role Extraction
+
+NeoSC automatically extracts roles from Zitadel claims:
+
+### Role Claim Format
+
+```json
+{
+  "sub": "123456789",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "urn:zitadel:iam:org:project:360327617871609860:roles": {
+    "admin": {},
+    "neosc": {},
+    "user": {}
+  }
+}
+```
+
+### Role Determination Logic
+
+**Location:** `backend/server.py:245`
+
+```python
+# User is assigned 'admin' role if ANY of these conditions are true:
+is_admin = any(
+    'admin' in r.lower() or 
+    'administrator' in r.lower() or 
+    r.lower() == 'owner'
+    for r in roles
+) or any(
+    'admin' in g.lower()
+    for g in groups
+)
+
+user_role = 'admin' if is_admin else 'user'
+```
+
+**Admin Role Triggers:**
+- Role contains "admin" (any case)
+- Role equals "administrator"
+- Role equals "owner"
+- Group contains "admin"
+
+**Default:** All other users receive "user" role
+
+## Frontend Configuration
+
+### Zitadel Config File
+
+**Location:** `frontend/src/config/zitadel.js`
+
+```javascript
+// Provider 1: On-Premise
+export const ZITADEL_CONFIG = {
+  authority: process.env.REACT_APP_ZITADEL_AUTHORITY || 'https://manager.kappa4.com',
+  client_id: process.env.REACT_APP_ZITADEL_CLIENT_ID || '',
+  project_id: process.env.REACT_APP_ZITADEL_PROJECT_ID || '360327617871609860',
+  redirect_uri: `${window.location.origin}/auth/callback`,
+  post_logout_redirect_uri: window.location.origin,
+  scope: 'openid profile email urn:zitadel:iam:org:project:id:360327617871609860:aud urn:zitadel:iam:org:projects:roles',
+  response_type: 'code',
+  name: 'NeoSC SAP SSO',
+  provider_key: 'zitadel_onprem'
+};
+
+// Provider 2: Cloud
+export const ZITADEL_CLOUD_CONFIG = {
+  authority: 'https://beyondcloud-nxm7ab.us1.zitadel.cloud',
+  client_id: process.env.REACT_APP_ZITADEL_CLOUD_CLIENT_ID || '',
+  project_id: '360845682363341210',
+  redirect_uri: `${window.location.origin}/auth/callback`,
+  post_logout_redirect_uri: window.location.origin,
+  scope: 'openid profile email urn:zitadel:iam:org:project:id:360845682363341210:aud urn:zitadel:iam:org:projects:roles',
+  response_type: 'code',
+  name: 'Secure Connect by Neogenesys',
+  provider_key: 'zitadel_cloud'
+};
+```
+
+## Zitadel Configuration
+
+### Application Setup in Zitadel
+
+<Steps>
+  <Step title="Create Application">
+    In Zitadel console, create a new application:
+    - Application Type: **User Agent** (Public Client - SPA) or **Web**
+    - Name: "NeoSC" or your preferred name
+  </Step>
+  
+  <Step title="Configure Redirect URIs">
+    Add the following URIs:
+    
+    **Redirect URI (Callback):**
+    ```
+    https://your-domain.com/auth/callback
+    ```
+    
+    **Post Logout Redirect URI:**
+    ```
+    https://your-domain.com
+    ```
+  </Step>
+  
+  <Step title="Enable Grant Types">
+    Enable these grant types:
+    - ✅ Authorization Code
+    - ✅ Refresh Token
+  </Step>
+  
+  <Step title="Configure PKCE">
+    Enable PKCE:
+    - ✅ PKCE Required
+    - Code Challenge Method: **S256**
+  </Step>
+  
+  <Step title="Configure Scopes">
+    Enable the following scopes:
+    ```
+    openid
+    profile
+    email
+    urn:zitadel:iam:org:project:id:{YOUR_PROJECT_ID}:aud
+    urn:zitadel:iam:org:projects:roles
+    ```
+  </Step>
+  
+  <Step title="Get Credentials">
+    Copy the following values:
+    - Client ID
+    - Project ID
+    - Authority URL (your Zitadel instance URL)
+  </Step>
+</Steps>
+
+### Environment Variables
+
+**Backend (.env):**
+
+```bash
+# On-Premise Provider
+ZITADEL_AUTHORITY=https://manager.kappa4.com
+ZITADEL_CLIENT_ID=360979728544301063
+ZITADEL_PROJECT_ID=360327617871609860
+
+# Cloud Provider
+ZITADEL_CLOUD_AUTHORITY=https://beyondcloud-nxm7ab.us1.zitadel.cloud
+ZITADEL_CLOUD_CLIENT_ID=360979499183035237
+ZITADEL_CLOUD_PROJECT_ID=360845682363341210
+```
+
+**Frontend (.env):**
+
+```bash
+# On-Premise Provider
+REACT_APP_ZITADEL_AUTHORITY=https://manager.kappa4.com
+REACT_APP_ZITADEL_CLIENT_ID=360979728544301063
+REACT_APP_ZITADEL_PROJECT_ID=360327617871609860
+
+# Cloud Provider
+REACT_APP_ZITADEL_CLOUD_AUTHORITY=https://beyondcloud-nxm7ab.us1.zitadel.cloud
+REACT_APP_ZITADEL_CLOUD_CLIENT_ID=360979499183035237
+REACT_APP_ZITADEL_CLOUD_PROJECT_ID=360845682363341210
+```
+
+## Testing SSO
+
+<Steps>
+  <Step title="Verify Configuration">
+    Ensure redirect URIs are configured in Zitadel console
+  </Step>
+  
+  <Step title="Create Test User">
+    Create a user in Zitadel with appropriate roles:
+    - For admin access: assign "admin" or "neosc" role
+    - For user access: no special role needed
+  </Step>
+  
+  <Step title="Test Login Flow">
+    1. Navigate to login page
+    2. Click SSO button ("NeoSC SAP SSO" or "Secure Connect")
+    3. Authenticate with Zitadel
+    4. Verify redirect to NeoSC dashboard
+  </Step>
+  
+  <Step title="Verify Role Extraction">
+    Check that user role is correctly assigned:
+    ```http
+    GET /api/auth/me
+    Authorization: Bearer {token}
+    ```
+    
+    Verify `role` field matches assigned Zitadel roles
+  </Step>
+</Steps>
+
+## Security Considerations
+
+<AccordionGroup>
+  <Accordion title="PKCE Required">
+    Always use PKCE (S256) for the authorization code flow. Never use implicit flow or authorization code without PKCE for public clients.
+  </Accordion>
+  
+  <Accordion title="State Parameter">
+    Always include and validate the state parameter to prevent CSRF attacks.
+  </Accordion>
+  
+  <Accordion title="Redirect URI Validation">
+    Zitadel strictly validates redirect URIs. Ensure exact match including protocol, domain, and path.
+  </Accordion>
+  
+  <Accordion title="Token Storage">
+    Store Zitadel tokens securely. The backend handles token exchange to prevent token exposure to the client.
+  </Accordion>
+  
+  <Accordion title="Role Claim Security">
+    Always validate and sanitize role claims from the identity provider before assigning application permissions.
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Redirect URI Mismatch">
+    **Error:** `redirect_uri_mismatch`
+    
+    **Solution:** Verify the redirect URI in your code exactly matches the URI configured in Zitadel (including trailing slashes).
+  </Accordion>
+  
+  <Accordion title="Invalid Code Verifier">
+    **Error:** `invalid_grant` or `invalid_code_verifier`
+    
+    **Solution:** Ensure the code verifier is correctly stored in sessionStorage and sent to the backend. Verify PKCE is enabled in Zitadel.
+  </Accordion>
+  
+  <Accordion title="Missing Roles">
+    **Error:** User has no roles in NeoSC
+    
+    **Solution:** 
+    1. Verify roles are assigned in Zitadel project
+    2. Check scope includes `urn:zitadel:iam:org:projects:roles`
+    3. Inspect ID token claims for role data
+  </Accordion>
+  
+  <Accordion title="CORS Errors">
+    **Error:** CORS policy blocking token exchange
+    
+    **Solution:** Use the backend `/api/auth/token-exchange` endpoint instead of calling Zitadel directly from the frontend.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MFA Configuration" icon="mobile" href="/authentication/mfa">
+    Configure multi-factor authentication
+  </Card>
+  <Card title="Local Authentication" icon="key" href="/authentication/local-auth">
+    Set up local JWT authentication
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    View authentication API endpoints
+  </Card>
+  <Card title="User Management" icon="users" href="/guides/user-management">
+    Manage users and roles
+  </Card>
+</CardGroup>

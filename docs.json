@@ -1,0 +1,99 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "NeoSC",
+  "theme": "aspen",
+  "colors": {
+    "primary": "#0066CC",
+    "light": "#3399FF",
+    "dark": "#003D7A"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/infra-neo/NeoSC"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/infra-neo/NeoSC"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/workspaces",
+              "features/sessions",
+              "features/organizations",
+              "features/security-policies",
+              "features/audit-logs"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "authentication/overview",
+              "authentication/local-auth",
+              "authentication/zitadel-sso",
+              "authentication/mfa"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "infrastructure/deployment",
+              "infrastructure/zero-trust",
+              "infrastructure/pomerium",
+              "infrastructure/netbird",
+              "infrastructure/docker-compose"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/user-management",
+              "guides/workspace-configuration",
+              "guides/security-best-practices",
+              "guides/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/users",
+              "api/workspaces",
+              "api/sessions",
+              "api/organizations",
+              "api/policies",
+              "api/audit-logs"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,270 @@
+---
+title: 'Organizations'
+description: 'Organization management endpoints for listing and viewing organization details'
+---
+
+# Organizations API
+
+Organizations group users and workspaces together. Each user belongs to an organization, which is used for access control and resource management.
+
+## Organization Model
+
+<ResponseField name="id" type="string">
+  Unique organization identifier (UUID v4)
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Organization name
+</ResponseField>
+
+<ResponseField name="domain" type="string">
+  Organization domain (e.g., "acme.com", "neogenesys.com")
+</ResponseField>
+
+<ResponseField name="users_count" type="integer">
+  Number of users in the organization
+</ResponseField>
+
+<ResponseField name="workspaces_count" type="integer">
+  Number of workspaces allocated to the organization
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime">
+  Timestamp when the organization was created (ISO 8601 format)
+</ResponseField>
+
+## List Organizations
+
+Retrieve all organizations accessible to the authenticated user.
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/organizations \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://your-domain.com/api/organizations",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+organizations = response.json()
+for org in organizations:
+    print(f"{org['name']}: {org['users_count']} users, {org['workspaces_count']} workspaces")
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-domain.com/api/organizations', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+const orgs = await response.json();
+console.log('Organizations:', orgs);
+```
+</CodeGroup>
+
+### Response
+
+```json
+[
+  {
+    "id": "org-123e4567-e89b-12d3-a456-426614174000",
+    "name": "Acme Corporation",
+    "domain": "acme.com",
+    "users_count": 42,
+    "workspaces_count": 15,
+    "created_at": "2026-01-15T10:00:00.000Z"
+  },
+  {
+    "id": "org-987f6543-e21b-45d6-b789-123456789abc",
+    "name": "Neogenesys",
+    "domain": "neogenesys.com",
+    "users_count": 28,
+    "workspaces_count": 12,
+    "created_at": "2025-11-20T14:30:00.000Z"
+  }
+]
+```
+
+## Default Organization
+
+If no organizations exist in the database, the API automatically creates a default organization based on the authenticated user's organization field:
+
+```json
+{
+  "id": "org-auto-generated-uuid",
+  "name": "Default Organization",  // or user's organization from profile
+  "domain": "neogenesys.com",
+  "users_count": 1,
+  "workspaces_count": 5,
+  "created_at": "2026-03-05T12:00:00.000Z"
+}
+```
+
+## Organization Relationship with Users
+
+Users are associated with organizations through the `organization` field in the User model:
+
+```json User Example
+{
+  "id": "user-123",
+  "email": "john@acme.com",
+  "name": "John Doe",
+  "organization": "Acme Corporation",  // Links to organization name
+  "role": "user"
+}
+```
+
+## Use Cases
+
+### Track Organization Resources
+
+```python
+import requests
+
+BASE_URL = "https://your-domain.com/api"
+token = "your-token-here"
+headers = {"Authorization": f"Bearer {token}"}
+
+# Get organization stats
+orgs = requests.get(f"{BASE_URL}/organizations", headers=headers).json()
+
+for org in orgs:
+    print(f"\n{org['name']}")
+    print(f"  Domain: {org['domain']}")
+    print(f"  Users: {org['users_count']}")
+    print(f"  Workspaces: {org['workspaces_count']}")
+    print(f"  Created: {org['created_at']}")
+```
+
+### Organization Dashboard
+
+```python
+import requests
+from datetime import datetime
+
+def get_organization_dashboard(token):
+    """Get comprehensive organization dashboard data"""
+    headers = {"Authorization": f"Bearer {token}"}
+    base = "https://your-domain.com/api"
+    
+    # Get organizations
+    orgs = requests.get(f"{base}/organizations", headers=headers).json()
+    
+    # Get stats
+    stats = requests.get(f"{base}/stats", headers=headers).json()
+    
+    dashboard = {
+        "organizations": orgs,
+        "total_organizations": len(orgs),
+        "total_users": sum(org['users_count'] for org in orgs),
+        "total_workspaces": sum(org['workspaces_count'] for org in orgs),
+        "active_sessions": stats['active_sessions'],
+        "security_score": stats['security_score'],
+        "uptime": stats['uptime']
+    }
+    
+    return dashboard
+
+# Usage
+dashboard = get_organization_dashboard(token)
+print(f"Total Organizations: {dashboard['total_organizations']}")
+print(f"Total Users: {dashboard['total_users']}")
+print(f"Total Workspaces: {dashboard['total_workspaces']}")
+print(f"Active Sessions: {dashboard['active_sessions']}")
+```
+
+## Current Limitations
+
+<Note>
+  The current API implementation provides **read-only** access to organizations. Organizations are automatically created when users register or log in via SSO.
+  
+  The following operations are not available:
+  - Manual organization creation (POST /api/organizations)
+  - Organization updates (PUT /api/organizations/{id})
+  - Organization deletion (DELETE /api/organizations/{id})
+  - User assignment to organizations
+  - Workspace allocation to organizations
+</Note>
+
+## Future Enhancements
+
+Planned features for organization management:
+
+<CardGroup cols={2}>
+  <Card title="Create Organizations" icon="plus">
+    Admin endpoint to create new organizations
+  </Card>
+  <Card title="Update Settings" icon="gear">
+    Modify organization name, domain, and settings
+  </Card>
+  <Card title="User Assignment" icon="user-plus">
+    Add and remove users from organizations
+  </Card>
+  <Card title="Resource Quotas" icon="chart-line">
+    Set workspace and user limits per organization
+  </Card>
+  <Card title="Billing Integration" icon="credit-card">
+    Track usage and costs per organization
+  </Card>
+  <Card title="SSO Configuration" icon="key">
+    Configure SSO per organization
+  </Card>
+</CardGroup>
+
+## Integration with Stats API
+
+Combine organization data with system statistics:
+
+```bash
+# Get organization list
+curl https://your-domain.com/api/organizations \
+  -H "Authorization: Bearer your-token-here"
+
+# Get system stats
+curl https://your-domain.com/api/stats \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```json Stats Response
+{
+  "active_sessions": 12,
+  "total_workspaces": 15,
+  "total_users": 42,
+  "security_score": 98,
+  "uptime": "99.9%"
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="error">
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+  Missing or invalid authentication token
+</ResponseField>
+
+## Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Users API" icon="users" href="/api/users">
+    Manage users within organizations
+  </Card>
+  <Card title="Workspaces API" icon="desktop" href="/api/workspaces">
+    Manage workspaces allocated to organizations
+  </Card>
+  <Card title="Audit Logs" icon="clipboard-list" href="/api/audit-logs">
+    Track organization-level activity
+  </Card>
+  <Card title="Stats" icon="chart-bar" href="/api/overview#stats-endpoint">
+    View organization statistics
+  </Card>
+</CardGroup>

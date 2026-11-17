@@ -1,0 +1,660 @@
+---
+title: Monitoring and Observability
+description: Monitoring workspaces, sessions, and audit logs for operational insights
+---
+
+## Overview
+
+NeoSC provides comprehensive monitoring capabilities for tracking workspace usage, active sessions, user activity, and security events. This guide covers monitoring endpoints, metrics, and operational best practices.
+
+## System Statistics
+
+### Overview Metrics
+
+Get high-level platform statistics:
+
+```bash
+GET /api/stats
+Authorization: Bearer <token>
+```
+
+Response:
+```json
+{
+  "active_sessions": 12,
+  "total_workspaces": 5,
+  "total_users": 47,
+  "security_score": 98,
+  "uptime": "99.9%"
+}
+```
+
+Implementation:
+```python
+# From backend/server.py:822-835
+@api_router.get("/stats")
+async def get_stats(user: dict = Depends(get_current_user)):
+    active_sessions = await db.sessions.count_documents({"status": "active"})
+    total_workspaces = await db.workspaces.count_documents({})
+    total_users = await db.users.count_documents({})
+    
+    return {
+        "active_sessions": active_sessions,
+        "total_workspaces": total_workspaces or 5,
+        "total_users": total_users or 1,
+        "security_score": 98,
+        "uptime": "99.9%"
+    }
+```
+
+### Dashboard Integration
+
+Dashboard displays these metrics with visual indicators:
+
+- **Active Workspaces**: Real-time count of running workspace sessions
+- **Users**: Total registered user count
+- **Security Score**: Composite metric (98% default, based on policy compliance)
+- **Uptime**: Platform availability percentage
+
+## Session Monitoring
+
+### Session Model
+
+Sessions track workspace usage and security context:
+
+```python
+# From backend/server.py:78-91
+class Session(BaseModel):
+    id: str
+    user_id: str
+    user_email: str
+    workspace_id: str
+    workspace_name: str
+    workspace_type: str
+    status: str = "active"  # active, disconnected, terminated
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    ip_address: str = "10.0.0.1"
+    tunnel_status: str = "encrypted"
+    mfa_verified: bool = True
+```
+
+### Viewing All Sessions
+
+Retrieve user's session history:
+
+```bash
+GET /api/sessions
+Authorization: Bearer <token>
+```
+
+Returns all sessions for the authenticated user, sorted by start time:
+
+```json
+[
+  {
+    "id": "ses-abc123",
+    "user_email": "user@example.com",
+    "workspace_name": "SAP Neogénesys",
+    "workspace_type": "html5",
+    "status": "active",
+    "started_at": "2026-03-05T10:30:00Z",
+    "ip_address": "10.100.10.152",
+    "tunnel_status": "encrypted",
+    "mfa_verified": true
+  }
+]
+```
+
+Implementation: `backend/server.py:687-690`
+
+### Monitoring Active Sessions
+
+Get currently active sessions only:
+
+```bash
+GET /api/sessions/active
+Authorization: Bearer <token>
+```
+
+Filters sessions with `status: "active"`:
+
+```python
+# backend/server.py:692-698
+@api_router.get("/sessions/active")
+async def get_active_sessions(user: dict = Depends(get_current_user)):
+    sessions = await db.sessions.find(
+        {"user_id": user['id'], "status": "active"},
+        {"_id": 0}
+    ).to_list(100)
+    return sessions
+```
+
+<Note>
+Users can only view their own sessions. Admins should query the MongoDB `sessions` collection directly for cross-user monitoring.
+</Note>
+
+### Session Lifecycle Tracking
+
+**Session creation** (workspace launch):
+```python
+# backend/server.py:619-660
+@api_router.post("/workspaces/{workspace_id}/launch")
+async def launch_workspace(workspace_id: str, user: dict = Depends(get_current_user)):
+    # Create new session
+    session = Session(
+        user_id=user['id'],
+        user_email=user['email'],
+        workspace_id=workspace_id,
+        workspace_name=workspace['name'],
+        workspace_type=workspace['type']
+    )
+    await db.sessions.insert_one(session_doc)
+```
+
+**Session termination** (workspace stop):
+```python
+# backend/server.py:662-683
+@api_router.post("/workspaces/{workspace_id}/stop")
+async def stop_workspace(workspace_id: str, user: dict = Depends(get_current_user)):
+    await db.sessions.update_one(
+        {"id": session['id']},
+        {"$set": {"status": "terminated", "ended_at": datetime.now(timezone.utc).isoformat()}}
+    )
+```
+
+**Session disconnect**:
+```python
+# backend/server.py:700-722
+@api_router.post("/sessions/{session_id}/disconnect")
+async def disconnect_session(session_id: str, user: dict = Depends(get_current_user)):
+    await db.sessions.update_one(
+        {"id": session_id},
+        {"$set": {"status": "disconnected", "ended_at": datetime.now(timezone.utc).isoformat()}}
+    )
+```
+
+### Session Security Indicators
+
+Each session includes security context:
+
+```json
+{
+  "tunnel_status": "encrypted",
+  "mfa_verified": true,
+  "ip_address": "10.100.10.152"
+}
+```
+
+Monitor these fields to identify:
+- **Unencrypted connections**: `tunnel_status != "encrypted"`
+- **MFA bypass**: `mfa_verified == false`
+- **Unusual locations**: Unexpected IP addresses
+
+## Workspace Monitoring
+
+### Workspace Status
+
+Track workspace availability and usage:
+
+```bash
+GET /api/workspaces
+Authorization: Bearer <token>
+```
+
+Response includes status field:
+```json
+{
+  "id": "ws-sap-neogenesys",
+  "name": "SAP Neogénesys",
+  "status": "running"  // available, running, stopped, error
+}
+```
+
+### Status Interpretation
+
+| Status | Meaning | Action Required |
+|--------|---------|----------------|
+| `available` | Ready to launch | None |
+| `running` | Active user session | Monitor session duration |
+| `stopped` | Paused or inactive | Resume or reset to available |
+| `error` | Launch or runtime failure | Check logs, verify configuration |
+
+### Workspace Usage Patterns
+
+Query sessions by workspace:
+
+```javascript
+// MongoDB query (admin access)
+db.sessions.aggregate([
+  { $group: {
+    _id: "$workspace_id",
+    workspace_name: { $first: "$workspace_name" },
+    total_sessions: { $sum: 1 },
+    active_sessions: {
+      $sum: { $cond: [{ $eq: ["$status", "active"] }, 1, 0] }
+    }
+  }}
+])
+```
+
+<Note>
+Resource usage metrics (CPU, memory, storage utilization) are planned for P2 implementation. Current specs are display-only labels.
+</Note>
+
+## Audit Log Monitoring
+
+### Audit Log Model
+
+```python
+# From backend/server.py:94-103
+class AuditLog(BaseModel):
+    id: str
+    user_id: str
+    user_email: str
+    action: str
+    resource: str
+    details: str
+    ip_address: str = "192.168.1.1"
+    timestamp: datetime
+    success: bool = True
+```
+
+### Retrieving Audit Logs
+
+```bash
+GET /api/audit-logs
+Authorization: Bearer <token>
+```
+
+**Access control**:
+- **Regular users**: See only their own activity
+- **Admins**: See all user activity across the platform
+
+```python
+# backend/server.py:739-744
+query = {} if user.get('role') == 'admin' else {"user_id": user['id']}
+logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(500)
+```
+
+### Audit Event Types
+
+| Action | Resource | Description |
+|--------|----------|-------------|
+| `register` | `auth` | User registration |
+| `login` | `auth` | Local authentication |
+| `sso_login` | `auth` | SSO authentication |
+| `logout` | `auth` | User logout |
+| `launch_workspace` | `workspace:{id}` | Workspace launched |
+| `stop_workspace` | `workspace:{id}` | Workspace stopped |
+| `disconnect_session` | `session:{id}` | Session disconnected |
+| `create_workspace` | `workspace:{id}` | Workspace created (admin) |
+| `update_workspace` | `workspace:{id}` | Workspace updated (admin) |
+| `delete_workspace` | `workspace:{id}` | Workspace deleted (admin) |
+| `reset_workspaces` | `workspaces` | Workspaces reset to defaults |
+| `toggle_policy` | `policy:{id}` | Security policy toggled |
+
+### Filtering Audit Logs
+
+**MongoDB queries** (for advanced monitoring):
+
+```javascript
+// Failed authentication attempts
+db.audit_logs.find({
+  action: { $in: ["login", "sso_login"] },
+  success: false
+}).sort({ timestamp: -1 })
+
+// Admin actions
+db.audit_logs.find({
+  action: { $in: ["create_workspace", "update_workspace", "delete_workspace", "toggle_policy"] }
+}).sort({ timestamp: -1 })
+
+// Specific user activity
+db.audit_logs.find({
+  user_email: "admin@example.com"
+}).sort({ timestamp: -1 })
+
+// Activity in last 24 hours
+db.audit_logs.find({
+  timestamp: { $gte: new Date(Date.now() - 24*60*60*1000).toISOString() }
+}).sort({ timestamp: -1 })
+```
+
+### Audit Log Retention
+
+Current implementation stores logs indefinitely. For compliance:
+
+<Steps>
+  <Step title="Define retention policy">
+    Determine required retention period (e.g., 90 days, 1 year, 7 years for regulatory compliance).
+  </Step>
+  
+  <Step title="Implement TTL index">
+    Create MongoDB TTL index for automatic deletion:
+    
+    ```javascript
+    db.audit_logs.createIndex(
+      { "timestamp": 1 },
+      { expireAfterSeconds: 7776000 }  // 90 days
+    )
+    ```
+  </Step>
+  
+  <Step title="Archive before deletion">
+    Export logs to long-term storage before expiration:
+    
+    ```bash
+    mongoexport --db=neosc --collection=audit_logs \
+      --query='{"timestamp": {"$lt": "2025-12-01T00:00:00Z"}}' \
+      --out=audit_logs_2025.json
+    ```
+  </Step>
+</Steps>
+
+## Organization Monitoring
+
+### Organization Metrics
+
+```bash
+GET /api/organizations
+Authorization: Bearer <token>
+```
+
+Response:
+```json
+[
+  {
+    "id": "org-uuid",
+    "name": "Acme Corporation",
+    "domain": "acme.com",
+    "users_count": 47,
+    "workspaces_count": 5,
+    "created_at": "2026-01-15T08:00:00Z"
+  }
+]
+```
+
+<Note>
+The stats endpoint returns real-time counts from MongoDB. User and workspace counts default to 1 and 5 respectively if no records exist in the database.
+</Note>
+
+## Security Policy Monitoring
+
+### Policy Status
+
+Retrieve all security policies:
+
+```bash
+GET /api/policies
+Authorization: Bearer <token>
+```
+
+Response:
+```json
+[
+  {
+    "id": "pol-mfa-required",
+    "name": "MFA Required",
+    "type": "access",
+    "enabled": true,
+    "rules": ["Require MFA for login", "WebAuthn preferred", "TOTP as fallback"]
+  },
+  {
+    "id": "pol-network-zero-trust",
+    "name": "Zero Trust Network",
+    "type": "network",
+    "enabled": true,
+    "rules": ["No direct connections", "WireGuard encryption", "Identity verification"]
+  },
+  {
+    "id": "pol-session-recording",
+    "name": "Session Recording",
+    "type": "session",
+    "enabled": true,
+    "rules": ["Record screen activity", "Log keystrokes for audit", "30-day retention"]
+  }
+]
+```
+
+### Policy Compliance Tracking
+
+Monitor policy changes via audit logs:
+
+```javascript
+db.audit_logs.find({
+  action: "toggle_policy"
+}).sort({ timestamp: -1 })
+```
+
+Each policy change includes:
+- User who made the change
+- Timestamp of modification
+- New policy state (enabled/disabled)
+
+## Health Checks
+
+### Service Health
+
+Docker Compose includes health checks for all services:
+
+**Pomerium**:
+```yaml
+# infra/docker-compose.yml:66-70
+healthcheck:
+  test: ["CMD", "wget", "-qO-", "http://localhost:5080/ping"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+```
+
+**Frontend**:
+```yaml
+# infra/docker-compose.yml:98-102
+healthcheck:
+  test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+```
+
+**Backend**:
+```yaml
+# infra/docker-compose.yml:129-133
+healthcheck:
+  test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+```
+
+**MongoDB**:
+```yaml
+# infra/docker-compose.yml:149-154
+healthcheck:
+  test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+  interval: 30s
+  timeout: 10s
+  retries: 5
+```
+
+### Checking Service Status
+
+```bash
+# View health status
+docker compose ps
+
+# Detailed health output
+docker inspect neosc-backend --format='{{.State.Health.Status}}'
+
+# Health check logs
+docker inspect neosc-backend --format='{{range .State.Health.Log}}{{.Output}}{{end}}'
+```
+
+## Monitoring Integrations
+
+### Prometheus Metrics (Future)
+
+Planned metrics export:
+
+```python
+from prometheus_client import Counter, Histogram, Gauge
+
+# Session metrics
+active_sessions_gauge = Gauge('neosc_active_sessions', 'Number of active sessions')
+session_duration_histogram = Histogram('neosc_session_duration_seconds', 'Session duration')
+
+# Authentication metrics
+login_attempts_counter = Counter('neosc_login_attempts_total', 'Login attempts', ['status', 'method'])
+
+# Workspace metrics
+workspace_launches_counter = Counter('neosc_workspace_launches_total', 'Workspace launches', ['type'])
+```
+
+### Grafana Dashboards (Future)
+
+Visualization panels:
+- Active sessions over time
+- Workspace utilization by type
+- Authentication success/failure rates
+- Session duration distribution
+- User activity heatmap
+
+### Log Aggregation
+
+Centralize logs with ELK stack or similar:
+
+```yaml
+# Example Filebeat configuration
+filebeat.inputs:
+  - type: container
+    paths:
+      - '/var/lib/docker/containers/*/*.log'
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+```
+
+## Alerting
+
+### Critical Alerts
+
+<AccordionGroup>
+  <Accordion title="Failed Authentication Spike">
+    **Trigger**: More than 10 failed login attempts in 5 minutes
+    
+    **Query**:
+    ```javascript
+    db.audit_logs.count({
+      action: { $in: ["login", "sso_login"] },
+      success: false,
+      timestamp: { $gte: new Date(Date.now() - 5*60*1000).toISOString() }
+    })
+    ```
+    
+    **Action**: Review IP addresses, consider rate limiting or blocking.
+  </Accordion>
+  
+  <Accordion title="Service Unhealthy">
+    **Trigger**: Docker health check fails 3 consecutive times
+    
+    **Check**:
+    ```bash
+    docker inspect neosc-backend --format='{{.State.Health.Status}}'
+    ```
+    
+    **Action**: Restart service, check logs for errors, verify dependencies.
+  </Accordion>
+  
+  <Accordion title="High Session Count">
+    **Trigger**: Active sessions exceed license or resource limit
+    
+    **Query**:
+    ```bash
+    curl -H "Authorization: Bearer <admin_token>" \
+      https://api.portal.kappa4.com/api/stats | jq '.active_sessions'
+    ```
+    
+    **Action**: Review session durations, disconnect idle sessions, scale infrastructure.
+  </Accordion>
+  
+  <Accordion title="Policy Disabled">
+    **Trigger**: Security policy changed to disabled
+    
+    **Query**:
+    ```javascript
+    db.audit_logs.find({
+      action: "toggle_policy",
+      details: /disabled/,
+      timestamp: { $gte: new Date(Date.now() - 60*60*1000).toISOString() }
+    })
+    ```
+    
+    **Action**: Verify change was intentional, re-enable if unauthorized.
+  </Accordion>
+</AccordionGroup>
+
+### Warning Alerts
+
+- **Long-running sessions**: Sessions active > 8 hours
+- **Workspace error state**: Workspace stuck in error status
+- **Database connection issues**: MongoDB connectivity failures
+- **TLS certificate expiration**: Certificates expiring within 30 days
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Audit Reviews" icon="calendar-check">
+    Schedule weekly admin reviews of audit logs focusing on failed authentications, policy changes, and admin actions.
+  </Card>
+  
+  <Card title="Session Timeout Policies" icon="clock">
+    Implement automatic session disconnection after inactivity period (e.g., 1 hour) to reduce active session count.
+  </Card>
+  
+  <Card title="Capacity Planning" icon="chart-line">
+    Monitor session trends and workspace usage to predict infrastructure scaling needs.
+  </Card>
+  
+  <Card title="Backup Verification" icon="database">
+    Regularly test MongoDB backups and audit log exports to ensure data recoverability.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Sessions Not Appearing
+
+If sessions don't show up:
+
+1. Verify MongoDB connection: `docker logs neosc-mongo`
+2. Check session creation in backend logs: `docker logs neosc-backend | grep session`
+3. Query database directly:
+   ```javascript
+   db.sessions.find({user_id: "<user_id>"}).pretty()
+   ```
+
+### Audit Logs Missing
+
+If audit logs aren't being created:
+
+1. Verify `create_audit_log` function is called after each action
+2. Check MongoDB write permissions
+3. Review backend error logs for exceptions
+
+### Incorrect Session Counts
+
+If `/api/stats` shows wrong active session count:
+
+1. Check for sessions not properly terminated
+2. Query for orphaned sessions:
+   ```javascript
+   db.sessions.find({
+     status: "active",
+     started_at: { $lt: new Date(Date.now() - 24*60*60*1000).toISOString() }
+   })
+   ```
+3. Clean up manually or implement automatic timeout

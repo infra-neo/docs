@@ -1,0 +1,605 @@
+---
+title: Security Best Practices
+description: Security recommendations, MFA enforcement, and policy management
+---
+
+## Overview
+
+NeoSC is built with a **Zero Trust architecture** integrating Zitadel OIDC for authentication, Pomerium for access control, and NetBird for encrypted networking. This guide covers security hardening, MFA implementation, and policy enforcement.
+
+## Zero Trust Architecture
+
+NeoSC implements Zero Trust principles:
+
+### Network Layer (NetBird)
+
+- **WireGuard Encryption**: All workspace connections use encrypted tunnels
+- **No Open Ports**: Direct connections blocked, all traffic through authenticated tunnels
+- **Peer-to-Peer**: Direct encrypted connections between clients and resources
+
+```yaml
+# From infra/docker-compose.yml:19-26
+networks:
+  proxy:
+    driver: bridge  # Public network
+  internal:
+    driver: bridge
+    internal: true  # No external access
+```
+
+### Identity Layer (Zitadel + Pomerium)
+
+- **OIDC Authentication**: Zitadel provides identity verification
+- **PKCE Flow**: Enhanced security for public clients
+- **Access Proxy**: Pomerium validates every request before routing
+
+```yaml
+# From infra/docker-compose.yml:44-74
+pomerium:
+  image: pomerium/pomerium:latest
+  environment:
+    ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID}
+    ZITADEL_CLIENT_SECRET: ${ZITADEL_CLIENT_SECRET}
+```
+
+### Session Layer
+
+All workspace sessions are monitored and auditable:
+
+```python
+# From backend/server.py:78-91
+class Session(BaseModel):
+    id: str
+    user_id: str
+    workspace_id: str
+    status: str  # active, disconnected, terminated
+    tunnel_status: str = "encrypted"
+    mfa_verified: bool = True
+```
+
+## Multi-Factor Authentication
+
+### MFA Enforcement
+
+NeoSC enforces MFA through security policies:
+
+```python
+# From backend/server.py:768-774
+{
+    "id": "pol-mfa-required",
+    "name": "MFA Required",
+    "description": "Enforce multi-factor authentication for all users",
+    "type": "access",
+    "rules": ["Require MFA for login", "WebAuthn preferred", "TOTP as fallback"]
+}
+```
+
+### MFA Status Tracking
+
+All users have MFA enabled by default:
+
+```python
+# From backend/server.py:41-49
+class User(BaseModel):
+    id: str
+    email: str
+    name: str
+    organization: str = "Default Organization"
+    role: str = "user"
+    mfa_enabled: bool = True  # Default enabled
+```
+
+<Warning>
+WebAuthn/FIDO2 implementation is currently in development (P1 priority). MFA is enforced at the Zitadel SSO layer for SSO users. Local auth users should migrate to SSO for full MFA support.
+</Warning>
+
+### Implementing MFA with Zitadel
+
+<Steps>
+  <Step title="Enable MFA in Zitadel">
+    Configure MFA policies in Zitadel management console:
+    - Navigate to Organization Settings → Login Policy
+    - Enable "Multi-Factor Authentication"
+    - Select allowed methods: WebAuthn, OTP, SMS
+  </Step>
+  
+  <Step title="Enforce MFA for NeoSC project">
+    In Zitadel project settings:
+    - Select your NeoSC application
+    - Enable "Force MFA" option
+    - Set MFA grace period if needed
+  </Step>
+  
+  <Step title="Verify MFA in sessions">
+    NeoSC tracks MFA verification in session objects:
+    
+    ```python
+    # backend/server.py:619-660
+    session = Session(
+        user_id=user['id'],
+        mfa_verified=user.get('mfa_enabled', True)
+    )
+    ```
+  </Step>
+</Steps>
+
+### WebAuthn Registration (Planned)
+
+Future implementation will support:
+- Hardware security keys (YubiKey, Titan, etc.)
+- Platform authenticators (Touch ID, Windows Hello)
+- Passwordless authentication
+
+## Security Policies
+
+NeoSC implements three core security policies:
+
+### 1. MFA Required Policy
+
+```python
+# backend/server.py:768-774
+{
+    "id": "pol-mfa-required",
+    "type": "access",
+    "enabled": True,
+    "rules": [
+        "Require MFA for login",
+        "WebAuthn preferred",
+        "TOTP as fallback"
+    ]
+}
+```
+
+**Enforcement**: Integrated with Zitadel authentication flow.
+
+### 2. Zero Trust Network Policy
+
+```python
+# backend/server.py:776-782
+{
+    "id": "pol-network-zero-trust",
+    "type": "network",
+    "enabled": True,
+    "rules": [
+        "No direct connections",
+        "WireGuard encryption",
+        "Identity verification"
+    ]
+}
+```
+
+**Enforcement**: NetBird tunnels required for internal resource access.
+
+### 3. Session Recording Policy
+
+```python
+# backend/server.py:784-791
+{
+    "id": "pol-session-recording",
+    "type": "session",
+    "enabled": True,
+    "rules": [
+        "Record screen activity",
+        "Log keystrokes for audit",
+        "30-day retention"
+    ]
+}
+```
+
+<Note>
+Session recording playback is planned for P1 implementation. Recording infrastructure requires VDI backend integration (Kasm/Guacamole).
+</Note>
+
+### Managing Policies
+
+Admins can toggle policies via API:
+
+```bash
+PATCH /api/policies/{policy_id}
+Authorization: Bearer <admin_token>
+```
+
+Implementation:
+```python
+# backend/server.py:805-819
+@api_router.patch("/policies/{policy_id}")
+async def toggle_policy(policy_id: str, user: dict = Depends(get_current_user)):
+    policy = await db.policies.find_one({"id": policy_id})
+    new_status = not policy.get('enabled', True)
+    await db.policies.update_one({"id": policy_id}, {"$set": {"enabled": new_status}})
+```
+
+<Warning>
+Disabling security policies reduces system security posture. All policy changes are logged to audit trail for compliance review.
+</Warning>
+
+## Authentication Security
+
+### Password Security
+
+Local authentication uses SHA-256 hashing:
+
+```python
+# backend/server.py:126-127
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+```
+
+<Warning>
+**Security Recommendation**: Upgrade to bcrypt or Argon2 for production deployments. SHA-256 is vulnerable to rainbow table attacks despite being cryptographically secure.
+</Warning>
+
+**Recommended implementation**:
+```python
+import bcrypt
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password: str, hash: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hash.encode())
+```
+
+### Token Management
+
+Bearer tokens are generated using cryptographically secure random:
+
+```python
+# backend/server.py:129-130
+def generate_token() -> str:
+    return secrets.token_urlsafe(32)  # 256 bits of entropy
+```
+
+**Token storage**: In-memory dictionary (development)
+```python
+active_tokens = {}  # backend/server.py:133
+```
+
+<Warning>
+**Production Recommendation**: Use Redis or JWT with refresh tokens for token persistence across server restarts and horizontal scaling.
+</Warning>
+
+### SSO Security (Zitadel)
+
+Zitadel integration uses PKCE for enhanced security:
+
+```python
+# backend/server.py:326-436
+@api_router.post("/auth/token-exchange")
+async def token_exchange(request: TokenExchangeRequest):
+    # Exchange authorization code for tokens
+    token_response = await http_client.post(
+        f"{authority}/oauth/v2/token",
+        data={
+            'grant_type': 'authorization_code',
+            'client_id': client_id,
+            'code': request.code,
+            'redirect_uri': request.redirect_uri,
+            'code_verifier': request.code_verifier,  # PKCE verification
+        }
+    )
+```
+
+**PKCE Benefits**:
+- Prevents authorization code interception
+- No client secret required for public clients
+- Secure for single-page applications
+
+## Network Security
+
+### Pomerium Access Proxy
+
+All external traffic routes through Pomerium:
+
+```yaml
+# infra/docker-compose.yml:44-74
+pomerium:
+  networks:
+    - proxy    # External access
+    - internal # Backend access
+  ports:
+    - "443:443"
+    - "80:80"   # Redirect to HTTPS
+```
+
+**Security features**:
+- TLS termination
+- OIDC authentication before routing
+- Header injection for user context
+- No direct backend exposure
+
+### Internal Network Isolation
+
+```yaml
+# infra/docker-compose.yml:80-102
+frontend:
+  networks:
+    - internal  # No external ports
+  # Accessed only via Pomerium at portal.kappa4.com
+
+backend:
+  networks:
+    - internal  # No external ports
+  # Accessed only via Pomerium at api.portal.kappa4.com
+```
+
+### CORS Configuration
+
+Backend restricts cross-origin requests:
+
+```python
+# backend/server.py:846-852
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+<Warning>
+Set `CORS_ORIGINS` to specific domains in production:
+```bash
+CORS_ORIGINS=https://portal.kappa4.com,https://gate.kappa4.com
+```
+</Warning>
+
+## Audit and Compliance
+
+### Comprehensive Audit Logging
+
+All security-relevant events are logged:
+
+```python
+# backend/server.py:94-103
+class AuditLog(BaseModel):
+    id: str
+    user_id: str
+    user_email: str
+    action: str
+    resource: str
+    details: str
+    ip_address: str = "192.168.1.1"
+    timestamp: datetime
+    success: bool = True
+```
+
+### Logged Security Events
+
+| Action | Resource | Details |
+|--------|----------|--------|
+| `register` | `auth` | User registration with organization |
+| `login` | `auth` | Local authentication attempt |
+| `sso_login` | `auth` | SSO login with provider and role |
+| `logout` | `auth` | Session termination |
+| `toggle_policy` | `policy:{id}` | Policy enabled/disabled |
+| `launch_workspace` | `workspace:{id}` | Workspace launch with security context |
+| `disconnect_session` | `session:{id}` | Session disconnection |
+
+### Audit Log Access
+
+```bash
+GET /api/audit-logs
+Authorization: Bearer <token>
+```
+
+**Access control**:
+```python
+# backend/server.py:739-744
+@api_router.get("/audit-logs")
+async def get_audit_logs(user: dict = Depends(get_current_user)):
+    # Admins see all, users see only their own
+    query = {} if user.get('role') == 'admin' else {"user_id": user['id']}
+```
+
+### Compliance Features
+
+<CardGroup cols={2}>
+  <Card title="SOC 2 Type II" icon="shield-check">
+    Audit logs provide evidence for access controls, monitoring, and incident response requirements.
+  </Card>
+  
+  <Card title="GDPR Compliance" icon="scale-balanced">
+    User consent tracking, data access logs, and retention policies support data protection requirements.
+  </Card>
+  
+  <Card title="ISO 27001" icon="certificate">
+    Security policies, access controls, and audit trails align with information security management standards.
+  </Card>
+  
+  <Card title="HIPAA" icon="hospital">
+    Session recording and encrypted tunnels support healthcare data protection requirements.
+  </Card>
+</CardGroup>
+
+## Security Checklist
+
+<Steps>
+  <Step title="Enable SSO">
+    Configure Zitadel SSO for all users instead of local authentication:
+    - Centralized credential management
+    - MFA enforcement at IdP level
+    - Automatic role provisioning
+  </Step>
+  
+  <Step title="Enforce MFA">
+    Verify MFA policy is enabled:
+    ```bash
+    GET /api/policies/pol-mfa-required
+    # Ensure "enabled": true
+    ```
+  </Step>
+  
+  <Step title="Configure Pomerium">
+    Set up TLS certificates and authentication:
+    - Use valid TLS certificates (Let's Encrypt or corporate CA)
+    - Configure Zitadel as IdP in Pomerium
+    - Set secure cookie secrets
+  </Step>
+  
+  <Step title="Deploy NetBird">
+    Roll out NetBird client to all users:
+    - Install NetBird on workstations
+    - Authenticate against management server
+    - Verify tunnel connectivity
+  </Step>
+  
+  <Step title="Review Audit Logs">
+    Regularly monitor for suspicious activity:
+    ```bash
+    GET /api/audit-logs?success=false
+    # Review failed authentication attempts
+    ```
+  </Step>
+  
+  <Step title="Rotate Secrets">
+    Update credentials periodically:
+    - Pomerium shared secret
+    - Pomerium cookie secret
+    - JWT signing keys
+    - Database credentials
+  </Step>
+</Steps>
+
+## Environment Security
+
+### Production Environment Variables
+
+**Backend** (`backend/.env`):
+```bash
+MONGO_URL=mongodb://mongo:27017/neosc
+DB_NAME=neosc
+JWT_SECRET=<strong-random-secret>
+ZITADEL_AUTHORITY=https://manager.kappa4.com
+ZITADEL_CLIENT_ID=<your-client-id>
+ZITADEL_CLIENT_SECRET=<your-client-secret>
+ZITADEL_PROJECT_ID=<your-project-id>
+CORS_ORIGINS=https://portal.kappa4.com
+TRUST_POMERIUM_HEADERS=true
+```
+
+**Pomerium** (`.env`):
+```bash
+ZITADEL_CLIENT_ID=<your-client-id>
+ZITADEL_CLIENT_SECRET=<your-client-secret>
+POMERIUM_SHARED_SECRET=<256-bit-base64>
+POMERIUM_COOKIE_SECRET=<256-bit-base64>
+```
+
+<Warning>
+**Never commit secrets to version control**. Use secret management solutions:
+- Docker secrets
+- Kubernetes secrets
+- HashiCorp Vault
+- AWS Secrets Manager
+</Warning>
+
+### Secret Generation
+
+Generate secure secrets:
+
+```bash
+# Pomerium shared secret (256 bits)
+openssl rand -base64 32
+
+# Pomerium cookie secret (256 bits)
+openssl rand -base64 32
+
+# JWT secret
+openssl rand -hex 32
+```
+
+## Incident Response
+
+### Detecting Security Events
+
+**Failed authentication attempts**:
+```bash
+GET /api/audit-logs
+# Filter for success: false, action: login
+```
+
+**Unauthorized access attempts**:
+```bash
+# Monitor 403 Forbidden responses in Pomerium logs
+docker logs pomerium | grep "403"
+```
+
+**Suspicious session activity**:
+```bash
+GET /api/sessions
+# Check for unusual IP addresses or session durations
+```
+
+### Response Procedures
+
+<Steps>
+  <Step title="Identify the threat">
+    Review audit logs to determine scope and impact of security event.
+  </Step>
+  
+  <Step title="Contain the breach">
+    Immediately revoke compromised credentials:
+    ```bash
+    # Force logout
+    POST /api/auth/logout
+    Authorization: Bearer <compromised_token>
+    ```
+  </Step>
+  
+  <Step title="Disable affected accounts">
+    For SSO users, disable in Zitadel. For local users, consider implementing account suspension endpoint.
+  </Step>
+  
+  <Step title="Rotate secrets">
+    Update all authentication secrets and redeploy services.
+  </Step>
+  
+  <Step title="Document incident">
+    Create incident report including:
+    - Timeline of events
+    - Affected users and resources
+    - Response actions taken
+    - Preventive measures implemented
+  </Step>
+</Steps>
+
+## Best Practices Summary
+
+<AccordionGroup>
+  <Accordion title="Authentication">
+    - Use Zitadel SSO instead of local authentication
+    - Enforce MFA for all users, especially admins
+    - Rotate JWT secrets every 90 days
+    - Implement account lockout after failed attempts (future)
+  </Accordion>
+  
+  <Accordion title="Authorization">
+    - Follow principle of least privilege
+    - Assign admin role only when necessary
+    - Review role assignments quarterly
+    - Audit admin actions regularly
+  </Accordion>
+  
+  <Accordion title="Network">
+    - Require NetBird tunnels for all internal resources
+    - Use Pomerium for external access only
+    - Disable direct backend/frontend port exposure
+    - Implement network segmentation
+  </Accordion>
+  
+  <Accordion title="Monitoring">
+    - Enable all security policies
+    - Review audit logs weekly
+    - Set up alerts for failed authentications
+    - Monitor session durations and IP addresses
+  </Accordion>
+  
+  <Accordion title="Data Protection">
+    - Encrypt data at rest (MongoDB encryption)
+    - Use TLS for all network traffic
+    - Implement session recording for compliance
+    - Define data retention policies
+  </Accordion>
+</AccordionGroup>

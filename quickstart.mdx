@@ -1,0 +1,289 @@
+---
+title: Quick Start
+description: Get NeoSC up and running in minutes with this step-by-step guide
+---
+
+# Quick Start
+
+This guide will help you deploy NeoSC and launch your first secure workspace in under 15 minutes.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- Docker and Docker Compose installed
+- A domain with DNS access (or use `/etc/hosts` for local testing)
+- Zitadel OIDC credentials (see [Zitadel SSO setup](/authentication/zitadel-sso))
+- Git installed
+
+<Note>
+For production deployments, you'll need valid TLS certificates. For local testing, you can use self-signed certificates.
+</Note>
+
+## Deployment Steps
+
+<Steps>
+  <Step title="Clone and configure">
+    Clone the repository and set up your environment variables.
+
+    ```bash
+    git clone https://github.com/infra-neo/NeoSC.git
+    cd NeoSC
+    cp infra/.env.example infra/.env
+    ```
+
+    Edit `infra/.env` and configure the following required variables:
+
+    ```bash infra/.env
+    # Zitadel OIDC Configuration
+    ZITADEL_AUTHORITY=https://manager.kappa4.com
+    ZITADEL_CLIENT_ID=your_client_id
+    ZITADEL_CLIENT_SECRET=your_client_secret
+    ZITADEL_PROJECT_ID=your_project_id
+
+    # Pomerium Secrets (generate with: openssl rand -base64 32)
+    POMERIUM_SHARED_SECRET=generate_random_32_bytes
+    POMERIUM_COOKIE_SECRET=generate_random_32_bytes
+
+    # Application Secrets
+    JWT_SECRET=generate_random_string
+
+    # MongoDB
+    MONGO_URL=mongodb://mongo:27017/neosc
+    DB_NAME=neosc
+    ```
+
+    <Accordion title="How to generate secure secrets">
+      Use OpenSSL to generate cryptographically secure secrets:
+
+      ```bash
+      # Generate Pomerium secrets
+      openssl rand -base64 32
+
+      # Generate JWT secret
+      openssl rand -hex 32
+      ```
+
+      Copy each generated value to the corresponding variable in your `.env` file.
+    </Accordion>
+  </Step>
+
+  <Step title="Configure Zitadel OIDC">
+    Set up your Zitadel application with the correct redirect URIs and scopes.
+
+    **Required Configuration:**
+    - **Redirect URI**: `https://portal.kappa4.com/auth/callback` (or your domain)
+    - **Post Logout URI**: `https://portal.kappa4.com`
+    - **Grant Types**: Authorization Code, Refresh Token
+    - **Application Type**: Web or User Agent (for PKCE)
+
+    **Required Scopes:**
+    ```
+    openid
+    profile
+    email
+    urn:zitadel:iam:org:project:id:{YOUR_PROJECT_ID}:aud
+    urn:zitadel:iam:org:projects:roles
+    ```
+
+    <Tip>
+      See the complete [Zitadel SSO Configuration Guide](/authentication/zitadel-sso) for detailed setup instructions.
+    </Tip>
+  </Step>
+
+  <Step title="Start the services">
+    Launch the full NeoSC stack using Docker Compose.
+
+    ```bash
+    cd infra
+    docker compose up -d
+    ```
+
+    This will start:
+    - **Pomerium** - Zero Trust reverse proxy (ports 80, 443)
+    - **Frontend** - React application (internal port 3000)
+    - **Backend** - FastAPI server (internal port 8001)
+    - **MongoDB** - Database (internal port 27017)
+
+    <Note>
+      All services except Pomerium run on an internal network with no direct external exposure. Pomerium handles all authentication and proxying.
+    </Note>
+
+    **Verify services are running:**
+
+    ```bash
+    docker compose ps
+    ```
+
+    You should see all four services in the "Up" state.
+  </Step>
+
+  <Step title="Verify deployment">
+    Test that the platform is accessible and properly configured.
+
+    **Check service health:**
+
+    ```bash
+    # Check Pomerium
+    curl -k https://gate.kappa4.com/ping
+
+    # Check backend (through Pomerium)
+    curl -k https://api.portal.kappa4.com/health
+    ```
+
+    **Access the web interface:**
+
+    Open your browser and navigate to:
+    ```
+    https://portal.kappa4.com
+    ```
+
+    You should be redirected to Zitadel for authentication.
+
+    <Accordion title="Troubleshooting common issues">
+      **503 Service Unavailable**
+      - Check that all containers are running: `docker compose ps`
+      - Check container logs: `docker compose logs -f`
+
+      **Certificate errors**
+      - For local testing, accept the self-signed certificate
+      - For production, configure valid TLS certificates in Pomerium config
+
+      **Authentication redirect fails**
+      - Verify redirect URIs match in Zitadel and your `.env` file
+      - Check Pomerium logs: `docker compose logs pomerium`
+    </Accordion>
+  </Step>
+
+  <Step title="Launch your first workspace">
+    Once authenticated, you can launch a secure workspace from the dashboard.
+
+    **Via the Web UI:**
+    1. Log in at `https://portal.kappa4.com`
+    2. Navigate to **Workspaces**
+    3. Click **Launch** on any workspace type
+    4. Wait for the workspace to start (status changes to "Running")
+    5. Click **Connect** to access the workspace
+
+    **Via the API:**
+
+    ```bash
+    # Get your access token from the browser (stored in localStorage after login)
+    TOKEN="your_jwt_token"
+
+    # List available workspaces
+    curl -X GET https://api.portal.kappa4.com/api/workspaces \
+      -H "Authorization: Bearer $TOKEN"
+
+    # Launch a workspace (use ID from the list)
+    curl -X POST https://api.portal.kappa4.com/api/workspaces/workspace-id/launch \
+      -H "Authorization: Bearer $TOKEN"
+    ```
+
+    <Accordion title="Example API response">
+      ```json
+      {
+        "id": "linux-desktop-001",
+        "name": "Linux Desktop",
+        "type": "linux",
+        "status": "running",
+        "connection": {
+          "url": "https://workspace-001.portal.kappa4.com",
+          "type": "html5",
+          "tunnel_status": "encrypted"
+        },
+        "security": {
+          "mfa_verified": true,
+          "tunnel_encrypted": true,
+          "session_recording": true
+        }
+      }
+      ```
+    </Accordion>
+  </Step>
+</Steps>
+
+## Default Workspaces
+
+NeoSC comes with five pre-configured workspace types:
+
+<CardGroup cols={2}>
+  <Card title="Linux Desktop" icon="linux">
+    Full Ubuntu desktop environment with GUI applications
+  </Card>
+  <Card title="Windows 11" icon="windows">
+    Windows 11 Pro desktop with RDP access
+  </Card>
+  <Card title="Secure Browser" icon="browser">
+    Isolated browser environment for safe web browsing
+  </Card>
+  <Card title="Dev Container" icon="code">
+    Pre-configured development environment with tools
+  </Card>
+  <Card title="Admin Desktop" icon="user-shield">
+    Privileged environment for system administration
+  </Card>
+</CardGroup>
+
+## Security Features
+
+Your NeoSC deployment includes these security features by default:
+
+- ✅ **Zero Trust Network** - All connections authenticated and encrypted
+- ✅ **SSO Integration** - Zitadel OIDC with MFA support
+- ✅ **Session Recording** - Complete audit trail of user actions
+- ✅ **Encrypted Tunnels** - WireGuard-based secure connections
+- ✅ **Identity Verification** - Continuous authentication checks
+- ✅ **Audit Logging** - Comprehensive logging of all activities
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand the system architecture and components
+  </Card>
+  <Card title="Configure Workspaces" icon="desktop" href="/guides/workspace-configuration">
+    Customize workspace types and settings
+  </Card>
+  <Card title="User Management" icon="users" href="/guides/user-management">
+    Add users and configure roles
+  </Card>
+  <Card title="Security Policies" icon="shield" href="/features/security-policies">
+    Configure MFA and security policies
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Integrate with the NeoSC API
+  </Card>
+  <Card title="Monitoring" icon="chart-line" href="/guides/monitoring">
+    Set up monitoring and alerts
+  </Card>
+</CardGroup>
+
+## Getting Help
+
+<Accordion title="Common issues and solutions">
+  **Services won't start**
+  - Check Docker is running: `docker ps`
+  - Check port availability: `sudo lsof -i :80 -i :443`
+  - Review logs: `docker compose logs`
+
+  **Authentication fails**
+  - Verify Zitadel configuration matches `.env` variables
+  - Check redirect URIs are correctly configured
+  - Ensure client ID and secret are valid
+
+  **Workspaces won't launch**
+  - Check MongoDB is running: `docker compose ps mongo`
+  - Verify backend logs: `docker compose logs backend`
+  - Ensure workspace images are available
+
+  **Network connectivity issues**
+  - Verify DNS resolution for configured domains
+  - Check firewall rules allow traffic on ports 80 and 443
+  - Ensure internal Docker network is properly configured
+</Accordion>
+
+Need more help? Check out:
+- [Deployment Guide](/infrastructure/deployment) - Detailed deployment instructions
+- [Troubleshooting](/guides/monitoring) - Advanced troubleshooting
+- [GitHub Issues](https://github.com/infra-neo/NeoSC/issues) - Report bugs or request features

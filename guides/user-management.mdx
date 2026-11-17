@@ -1,0 +1,349 @@
+---
+title: User Management
+description: Managing users, roles, and organizations in NeoSC
+---
+
+## Overview
+
+NeoSC supports both local authentication and Zitadel SSO integration for user management. The platform includes role-based access control (RBAC) with two primary roles: **admin** and **user**.
+
+## User Registration
+
+### Local Registration
+
+Users can register directly on the platform using email and password.
+
+<Steps>
+  <Step title="Create a user account">
+    Send a POST request to `/api/auth/register` with user details:
+    
+    ```json
+    {
+      "email": "user@example.com",
+      "password": "SecurePassword123",
+      "name": "John Doe",
+      "organization": "Acme Corporation"
+    }
+    ```
+    
+    The system automatically assigns the `user` role and enables MFA by default.
+  </Step>
+  
+  <Step title="Verify account creation">
+    The API returns an access token and user object:
+    
+    ```json
+    {
+      "access_token": "eyJhbGc...",
+      "token_type": "bearer",
+      "user": {
+        "id": "uuid-v4",
+        "email": "user@example.com",
+        "name": "John Doe",
+        "organization": "Acme Corporation",
+        "role": "user",
+        "mfa_enabled": true
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Record audit trail">
+    All registration events are automatically logged to the audit system with action type `register`.
+  </Step>
+</Steps>
+
+### SSO Registration with Zitadel
+
+NeoSC integrates with Zitadel OIDC for enterprise single sign-on.
+
+<Note>
+Zitadel SSO uses the PKCE flow for enhanced security. Two Zitadel instances are supported:
+- **On-premise**: `https://manager.kappa4.com` (default)
+- **Cloud**: `https://beyondcloud-nxm7ab.us1.zitadel.cloud`
+</Note>
+
+<Steps>
+  <Step title="Configure Zitadel client">
+    Set up the following environment variables:
+    
+    ```bash
+    ZITADEL_AUTHORITY=https://manager.kappa4.com
+    ZITADEL_CLIENT_ID=360979728544301063
+    ZITADEL_PROJECT_ID=360327617871609860
+    ```
+  </Step>
+  
+  <Step title="Initiate OIDC flow">
+    Users authenticate through Zitadel's authorization endpoint with PKCE challenge.
+  </Step>
+  
+  <Step title="Token exchange">
+    The backend handles token exchange via `/api/auth/token-exchange`:
+    
+    ```json
+    {
+      "code": "authorization_code",
+      "code_verifier": "pkce_verifier",
+      "redirect_uri": "https://portal.kappa4.com/auth/callback",
+      "provider": "zitadel_onprem"
+    }
+    ```
+    
+    See `backend/server.py:335-436` for implementation details.
+  </Step>
+  
+  <Step title="User provisioning">
+    The system automatically provisions users on first SSO login, extracting:
+    - Email from `email`, `preferred_username`, or `sub` claims
+    - Name from `name`, `given_name`, or `preferred_username` claims
+    - Organization from `org` or `urn:zitadel:iam:org:id` claims
+  </Step>
+</Steps>
+
+## User Roles
+
+### Role Types
+
+NeoSC implements two primary roles stored in the `User.role` field:
+
+| Role | Capabilities |
+|------|-------------|
+| **user** | Launch workspaces, manage own sessions, view personal audit logs |
+| **admin** | All user capabilities + manage workspaces, view all audit logs, toggle policies, manage organization settings |
+
+### Role Assignment via SSO
+
+When using Zitadel SSO, roles are automatically assigned based on claims:
+
+```python
+# From backend/server.py:244-252
+is_admin = any(
+    'admin' in r.lower() or 'administrator' in r.lower() or r.lower() == 'owner'
+    for r in roles
+) or any(
+    'admin' in g.lower()
+    for g in groups
+)
+
+user_role = 'admin' if is_admin else 'user'
+```
+
+<Warning>
+Role claims are extracted from project-specific Zitadel claims:
+- `urn:zitadel:iam:org:project:{PROJECT_ID}:roles`
+- Standard `roles` claim
+- `groups` claim (checks for 'admin' substring)
+</Warning>
+
+### Role-Based Endpoint Protection
+
+Admin-only endpoints enforce role checks:
+
+```python
+# From backend/server.py:560-563
+@api_router.post("/workspaces")
+async def create_workspace(workspace: WorkspaceCreate, user: dict = Depends(get_current_user)):
+    if user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+```
+
+Admin-restricted operations:
+- `POST /api/workspaces` - Create workspace
+- `PUT /api/workspaces/{id}` - Update workspace configuration
+- `DELETE /api/workspaces/{id}` - Delete workspace
+- `POST /api/workspaces/reset` - Reset to defaults
+
+## Organization Management
+
+### Organization Model
+
+Organizations group users and workspaces for multi-tenant support:
+
+```python
+# From backend/server.py:105-112
+class Organization(BaseModel):
+    id: str
+    name: str
+    domain: str
+    users_count: int = 0
+    workspaces_count: int = 0
+    created_at: datetime
+```
+
+### Default Organization
+
+New users are assigned to their specified organization or "Default Organization":
+
+```python
+# From backend/server.py:154-158
+user = User(
+    email=user_data.email,
+    name=user_data.name,
+    organization=user_data.organization or "Default Organization"
+)
+```
+
+### Viewing Organizations
+
+Retrieve all organizations via `GET /api/organizations`. The endpoint returns organization details with user and workspace counts.
+
+<Note>
+Organization creation and management endpoints are planned for future releases (P2 priority in roadmap).
+</Note>
+
+## User Authentication
+
+### Local Login
+
+Authenticate with email and password:
+
+```bash
+curl -X POST https://api.portal.kappa4.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "SecurePassword123"
+  }'
+```
+
+Password hashing uses SHA-256 (see `backend/server.py:126-127`).
+
+<Warning>
+In production, consider upgrading to bcrypt or Argon2 for password hashing to enhance security against rainbow table attacks.
+</Warning>
+
+### Token Management
+
+The backend uses bearer tokens stored in-memory:
+
+```python
+# From backend/server.py:132-143
+active_tokens = {}
+
+async def get_current_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    token = authorization.replace("Bearer ", "")
+    if token not in active_tokens:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    return active_tokens[token]
+```
+
+Include tokens in API requests:
+
+```bash
+Authorization: Bearer <access_token>
+```
+
+### Logout
+
+Revoke tokens via `POST /api/auth/logout`. This removes the token from the active tokens store and logs the event.
+
+## User Profile Management
+
+### Retrieve Current User
+
+Get authenticated user details:
+
+```bash
+GET /api/auth/me
+Authorization: Bearer <token>
+```
+
+Returns:
+```json
+{
+  "id": "user-uuid",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "organization": "Acme Corporation",
+  "role": "user",
+  "mfa_enabled": true
+}
+```
+
+### MFA Settings
+
+MFA is enabled by default for all users (`mfa_enabled: true`). The system enforces MFA policies as defined in security policies.
+
+<Note>
+WebAuthn/FIDO2 registration is planned for P1 priority implementation. Currently, MFA status is tracked but full MFA flow requires integration.
+</Note>
+
+## Audit Logging
+
+All user actions are automatically logged:
+
+```python
+# From backend/server.py:726-737
+async def create_audit_log(user_id: str, user_email: str, action: str, 
+                          resource: str, details: str, success: bool = True):
+    log = AuditLog(
+        user_id=user_id,
+        user_email=user_email,
+        action=action,
+        resource=resource,
+        details=details,
+        success=success
+    )
+```
+
+Logged events include:
+- `register` - User registration
+- `login` - Local authentication
+- `sso_login` - SSO authentication with provider and role
+- `logout` - Session termination
+- `launch_workspace` - Workspace launch
+- `stop_workspace` - Workspace stop
+- `disconnect_session` - Session disconnect
+
+View audit logs via `GET /api/audit-logs`:
+- **Admins**: See all user activity
+- **Users**: See only their own activity
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use SSO for Enterprise" icon="shield-check">
+    Leverage Zitadel SSO for centralized authentication and role management instead of managing local credentials.
+  </Card>
+  
+  <Card title="Assign Roles Carefully" icon="user-shield">
+    Grant admin role only to trusted users. Admins have full workspace and policy management capabilities.
+  </Card>
+  
+  <Card title="Monitor Audit Logs" icon="clipboard-list">
+    Regularly review audit logs to detect unauthorized access attempts and unusual activity patterns.
+  </Card>
+  
+  <Card title="Enable MFA" icon="lock">
+    Ensure MFA is enabled for all users, especially administrators with elevated privileges.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### SSO Login Fails
+
+If token exchange fails, check:
+1. Zitadel authority URL is accessible from backend
+2. Client ID and redirect URI match Zitadel configuration
+3. PKCE code verifier matches the challenge
+4. Backend logs for detailed error messages (`backend/server.py:365-371`)
+
+### Role Not Assigned Correctly
+
+Verify Zitadel role claims:
+- Check project ID matches: `ZITADEL_PROJECT_ID`
+- Ensure roles are granted in Zitadel project
+- Inspect ID token claims for `urn:zitadel:iam:org:project:{PROJECT_ID}:roles`
+
+### User Cannot Access Admin Endpoints
+
+Confirm:
+1. User role is set to `admin` in database
+2. Token is valid and contains correct user object
+3. Endpoint checks `user.get('role') == 'admin'`

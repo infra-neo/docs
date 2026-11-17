@@ -1,0 +1,123 @@
+{
+  "projectType": "saas",
+  "projectName": "NeoSC",
+  "projectDescription": "Zero Trust cloud VDI platform with secure workspace management, SSO authentication, and comprehensive audit capabilities.",
+  "theme": "aspen",
+  "primaryColor": "#0066CC",
+  "lightColor": "#3399FF",
+  "darkColor": "#003D7A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/workspaces",
+              "features/sessions",
+              "features/organizations",
+              "features/security-policies",
+              "features/audit-logs"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "authentication/overview",
+              "authentication/local-auth",
+              "authentication/zitadel-sso",
+              "authentication/mfa"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "infrastructure/deployment",
+              "infrastructure/zero-trust",
+              "infrastructure/pomerium",
+              "infrastructure/netbird",
+              "infrastructure/docker-compose"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/user-management",
+              "guides/workspace-configuration",
+              "guides/security-best-practices",
+              "guides/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/users",
+              "api/workspaces",
+              "api/sessions",
+              "api/organizations",
+              "api/policies",
+              "api/audit-logs"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Zero Trust Network Architecture",
+    "Multiple Workspace Types (Linux, Windows, Browser, Dev, Admin)",
+    "Zitadel OIDC SSO Integration",
+    "Session Management & Recording",
+    "Multi-tenant Organizations",
+    "Comprehensive Audit Logging",
+    "Pomerium Reverse Proxy",
+    "NetBird WireGuard Tunneling",
+    "MFA Enforcement",
+    "Security Policy Management"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "POST /api/auth/login",
+    "POST /api/auth/logout",
+    "POST /api/auth/sso",
+    "POST /api/auth/token-exchange",
+    "GET /api/auth/me",
+    "GET /api/workspaces",
+    "POST /api/workspaces",
+    "PUT /api/workspaces/{id}",
+    "DELETE /api/workspaces/{id}",
+    "POST /api/workspaces/reset",
+    "POST /api/workspaces/{id}/launch",
+    "POST /api/workspaces/{id}/stop",
+    "GET /api/sessions",
+    "GET /api/sessions/active",
+    "POST /api/sessions/{id}/disconnect",
+    "GET /api/organizations",
+    "GET /api/policies",
+    "PATCH /api/policies/{id}",
+    "GET /api/audit-logs",
+    "GET /api/stats",
+    "GET /api/"
+  ]
+}

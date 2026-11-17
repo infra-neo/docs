@@ -1,0 +1,464 @@
+---
+title: 'Audit Logs'
+description: 'Audit log endpoints for tracking user activity, workspace access, and security events'
+---
+
+# Audit Logs API
+
+Audit logs provide a comprehensive record of all user actions, security events, and system activity. They are essential for compliance, security monitoring, and troubleshooting.
+
+## Audit Log Model
+
+<ResponseField name="id" type="string">
+  Unique audit log identifier (UUID v4)
+</ResponseField>
+
+<ResponseField name="user_id" type="string">
+  ID of the user who performed the action
+</ResponseField>
+
+<ResponseField name="user_email" type="string">
+  Email of the user who performed the action
+</ResponseField>
+
+<ResponseField name="action" type="string">
+  Type of action performed (e.g., "login", "launch_workspace", "toggle_policy")
+</ResponseField>
+
+<ResponseField name="resource" type="string">
+  Resource affected by the action (e.g., "auth", "workspace:ws-123", "policy:pol-mfa")
+</ResponseField>
+
+<ResponseField name="details" type="string">
+  Human-readable description of what happened
+</ResponseField>
+
+<ResponseField name="ip_address" type="string">
+  IP address of the client (defaults to "192.168.1.1")
+</ResponseField>
+
+<ResponseField name="timestamp" type="datetime">
+  When the action occurred (ISO 8601 format)
+</ResponseField>
+
+<ResponseField name="success" type="boolean">
+  Whether the action succeeded (defaults to true)
+</ResponseField>
+
+## List Audit Logs
+
+Retrieve audit logs. Users see only their own logs; admins see all logs.
+
+<CodeGroup>
+```bash cURL (User)
+curl https://your-domain.com/api/audit-logs \
+  -H "Authorization: Bearer user-token"
+```
+
+```bash cURL (Admin)
+curl https://your-domain.com/api/audit-logs \
+  -H "Authorization: Bearer admin-token"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://your-domain.com/api/audit-logs",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+logs = response.json()
+for log in logs[:10]:  # Show first 10
+    print(f"[{log['timestamp']}] {log['user_email']}")
+    print(f"  Action: {log['action']}")
+    print(f"  Resource: {log['resource']}")
+    print(f"  Details: {log['details']}")
+    print(f"  Success: {log['success']}")
+    print()
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-domain.com/api/audit-logs', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+const logs = await response.json();
+console.log(`Found ${logs.length} audit logs`);
+```
+</CodeGroup>
+
+### Response
+
+```json
+[
+  {
+    "id": "log-f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "user_id": "a3d2c1b0-9876-4321-abcd-ef1234567890",
+    "user_email": "john.doe@acme.com",
+    "action": "login",
+    "resource": "auth",
+    "details": "User logged in successfully",
+    "ip_address": "192.168.1.1",
+    "timestamp": "2026-03-05T14:30:00.000Z",
+    "success": true
+  },
+  {
+    "id": "log-b2c3d4e5-6789-4abc-def0-123456789abc",
+    "user_id": "a3d2c1b0-9876-4321-abcd-ef1234567890",
+    "user_email": "john.doe@acme.com",
+    "action": "launch_workspace",
+    "resource": "workspace:ws-sap-neogenesys",
+    "details": "Launched SAP Neogénesys",
+    "ip_address": "192.168.1.1",
+    "timestamp": "2026-03-05T14:32:15.000Z",
+    "success": true
+  },
+  {
+    "id": "log-c3d4e5f6-7890-4bcd-ef01-23456789abcd",
+    "user_id": "a3d2c1b0-9876-4321-abcd-ef1234567890",
+    "user_email": "john.doe@acme.com",
+    "action": "disconnect_session",
+    "resource": "session:f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "details": "Session disconnected",
+    "ip_address": "192.168.1.1",
+    "timestamp": "2026-03-05T16:45:30.000Z",
+    "success": true
+  },
+  {
+    "id": "log-d4e5f6a7-8901-4cde-f012-3456789abcde",
+    "user_id": "admin-456",
+    "user_email": "admin@acme.com",
+    "action": "toggle_policy",
+    "resource": "policy:pol-mfa-required",
+    "details": "Policy enabled",
+    "ip_address": "192.168.1.100",
+    "timestamp": "2026-03-05T17:00:00.000Z",
+    "success": true
+  }
+]
+```
+
+### Sorting
+
+Logs are automatically sorted by timestamp in **descending order** (newest first), limited to the most recent 500 entries.
+
+### Access Control
+
+- **Regular users**: See only logs where `user_id` matches their own
+- **Admin users**: See all logs from all users
+
+## Action Types
+
+Audit logs capture the following action types:
+
+### Authentication Actions
+
+| Action | Resource | Description |
+|--------|----------|-------------|
+| `register` | `auth` | New user registration |
+| `login` | `auth` | Successful login |
+| `sso_login` | `auth` | SSO login via Zitadel |
+| `logout` | `auth` | User logout |
+
+### Workspace Actions
+
+| Action | Resource | Description |
+|--------|----------|-------------|
+| `launch_workspace` | `workspace:{id}` | Workspace launched |
+| `stop_workspace` | `workspace:{id}` | Workspace stopped |
+| `create_workspace` | `workspace:{id}` | New workspace created (admin) |
+| `update_workspace` | `workspace:{id}` | Workspace configuration updated (admin) |
+| `delete_workspace` | `workspace:{id}` | Workspace deleted (admin) |
+| `reset_workspaces` | `workspaces` | All workspaces reset to defaults (admin) |
+
+### Session Actions
+
+| Action | Resource | Description |
+|--------|----------|-------------|
+| `disconnect_session` | `session:{id}` | Session disconnected |
+
+### Policy Actions
+
+| Action | Resource | Description |
+|--------|----------|-------------|
+| `toggle_policy` | `policy:{id}` | Policy enabled or disabled |
+
+## Example: Filter Logs by Action
+
+```python
+import requests
+from typing import List, Dict
+
+def get_logs_by_action(token: str, action: str) -> List[Dict]:
+    """Get audit logs filtered by action type"""
+    response = requests.get(
+        "https://your-domain.com/api/audit-logs",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    all_logs = response.json()
+    return [log for log in all_logs if log['action'] == action]
+
+# Get all login events
+logins = get_logs_by_action(token, "login")
+print(f"Total logins: {len(logins)}")
+
+# Get all workspace launches
+launches = get_logs_by_action(token, "launch_workspace")
+print(f"Total workspace launches: {len(launches)}")
+
+# Get all policy changes
+policy_changes = get_logs_by_action(token, "toggle_policy")
+print(f"Total policy changes: {len(policy_changes)}")
+```
+
+## Example: Security Monitoring
+
+```python
+import requests
+from datetime import datetime, timedelta, timezone
+from collections import Counter
+
+BASE_URL = "https://your-domain.com/api"
+
+class SecurityMonitor:
+    def __init__(self, admin_token: str):
+        self.headers = {"Authorization": f"Bearer {admin_token}"}
+    
+    def get_all_logs(self) -> List[Dict]:
+        """Get all audit logs (admin only)"""
+        response = requests.get(
+            f"{BASE_URL}/audit-logs",
+            headers=self.headers
+        )
+        return response.json()
+    
+    def failed_actions(self) -> List[Dict]:
+        """Get all failed actions"""
+        logs = self.get_all_logs()
+        return [log for log in logs if not log['success']]
+    
+    def recent_activity(self, hours: int = 24) -> List[Dict]:
+        """Get activity from the last N hours"""
+        logs = self.get_all_logs()
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        
+        recent = []
+        for log in logs:
+            timestamp = datetime.fromisoformat(log['timestamp'].replace('Z', '+00:00'))
+            if timestamp >= cutoff:
+                recent.append(log)
+        
+        return recent
+    
+    def top_users(self, limit: int = 10) -> List[tuple]:
+        """Get most active users by action count"""
+        logs = self.get_all_logs()
+        user_counts = Counter(log['user_email'] for log in logs)
+        return user_counts.most_common(limit)
+    
+    def suspicious_activity(self) -> List[Dict]:
+        """Detect potentially suspicious activity"""
+        logs = self.get_all_logs()
+        suspicious = []
+        
+        # Group by user and check for rapid actions
+        from collections import defaultdict
+        user_actions = defaultdict(list)
+        
+        for log in logs:
+            user_actions[log['user_email']].append(log)
+        
+        # Check for users with many failed actions
+        for user, actions in user_actions.items():
+            failed = [a for a in actions if not a['success']]
+            if len(failed) > 5:
+                suspicious.append({
+                    'user': user,
+                    'reason': 'Multiple failed actions',
+                    'count': len(failed)
+                })
+        
+        return suspicious
+    
+    def generate_report(self):
+        """Generate comprehensive security report"""
+        print("\n=== Security Audit Report ===")
+        
+        # Total activity
+        all_logs = self.get_all_logs()
+        print(f"\nTotal audit logs: {len(all_logs)}")
+        
+        # Recent activity
+        recent = self.recent_activity(24)
+        print(f"Activity in last 24 hours: {len(recent)}")
+        
+        # Failed actions
+        failed = self.failed_actions()
+        print(f"Failed actions: {len(failed)}")
+        
+        # Top users
+        print("\nTop 5 Most Active Users:")
+        for user, count in self.top_users(5):
+            print(f"  {user}: {count} actions")
+        
+        # Suspicious activity
+        suspicious = self.suspicious_activity()
+        if suspicious:
+            print("\n⚠️  Suspicious Activity Detected:")
+            for item in suspicious:
+                print(f"  {item['user']}: {item['reason']} ({item['count']})")
+        else:
+            print("\n✓ No suspicious activity detected")
+        
+        # Action breakdown
+        print("\nAction Breakdown:")
+        action_counts = Counter(log['action'] for log in all_logs)
+        for action, count in action_counts.most_common():
+            print(f"  {action}: {count}")
+
+# Usage
+monitor = SecurityMonitor(admin_token="your-admin-token")
+monitor.generate_report()
+```
+
+## Example: Compliance Export
+
+```python
+import requests
+import csv
+from datetime import datetime
+
+def export_audit_logs_csv(token: str, filename: str = "audit_logs.csv"):
+    """Export audit logs to CSV for compliance reporting"""
+    response = requests.get(
+        "https://your-domain.com/api/audit-logs",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    
+    logs = response.json()
+    
+    with open(filename, 'w', newline='') as csvfile:
+        fieldnames = ['timestamp', 'user_email', 'action', 'resource', 
+                     'details', 'ip_address', 'success']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        
+        writer.writeheader()
+        for log in logs:
+            writer.writerow({
+                'timestamp': log['timestamp'],
+                'user_email': log['user_email'],
+                'action': log['action'],
+                'resource': log['resource'],
+                'details': log['details'],
+                'ip_address': log['ip_address'],
+                'success': log['success']
+            })
+    
+    print(f"Exported {len(logs)} audit logs to {filename}")
+
+# Export logs
+export_audit_logs_csv(token="your-token-here")
+```
+
+## Automatic Log Creation
+
+Audit logs are automatically created for:
+
+### User Actions
+- User registration
+- Login/logout
+- SSO authentication
+
+### Workspace Management
+- Launching workspaces
+- Stopping workspaces
+- Creating/updating/deleting workspaces (admin)
+- Resetting workspaces (admin)
+
+### Session Management
+- Disconnecting sessions
+
+### Policy Management
+- Toggling policies
+
+## Retention Policy
+
+<Info>
+  The API currently returns the **most recent 500 audit logs**. For production use, implement a retention policy to:
+  - Archive older logs to long-term storage
+  - Comply with data retention regulations
+  - Maintain database performance
+</Info>
+
+## Error Responses
+
+<ResponseField name="401" type="error">
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+  Missing or invalid authentication token
+</ResponseField>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Security Monitoring" icon="shield-halved">
+    Track failed login attempts and suspicious activity
+  </Card>
+  <Card title="Compliance Reporting" icon="file-contract">
+    Generate audit reports for regulatory requirements
+  </Card>
+  <Card title="User Activity" icon="chart-line">
+    Analyze user behavior and workspace usage patterns
+  </Card>
+  <Card title="Incident Investigation" icon="magnifying-glass">
+    Investigate security incidents and system issues
+  </Card>
+  <Card title="Access Review" icon="user-check">
+    Review who accessed which workspaces and when
+  </Card>
+  <Card title="Policy Compliance" icon="clipboard-check">
+    Verify policy enforcement and changes
+  </Card>
+</CardGroup>
+
+## Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Users" icon="users" href="/api/users">
+    User authentication creates audit logs
+  </Card>
+  <Card title="Workspaces" icon="desktop" href="/api/workspaces">
+    Workspace actions are logged
+  </Card>
+  <Card title="Sessions" icon="plug" href="/api/sessions">
+    Session events are tracked
+  </Card>
+  <Card title="Policies" icon="shield" href="/api/policies">
+    Policy changes are audited
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Tip>
+  **For Admins**:
+  - Regularly review audit logs for security monitoring
+  - Export logs periodically for backup and compliance
+  - Set up alerts for failed actions or suspicious patterns
+  - Use audit logs to investigate incidents
+</Tip>
+
+<Tip>
+  **For Developers**:
+  - All state-changing operations should create audit logs
+  - Include meaningful details in log entries
+  - Set `success: false` for failed operations
+  - Use consistent resource naming (e.g., "workspace:{id}")
+</Tip>

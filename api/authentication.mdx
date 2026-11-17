@@ -1,0 +1,367 @@
+---
+title: 'Authentication'
+description: 'API authentication using JWT tokens, SSO integration, and session management'
+---
+
+# Authentication
+
+NeoSC API supports multiple authentication methods:
+
+- **Email/Password** - Traditional registration and login
+- **SSO via Zitadel** - OIDC-based single sign-on
+- **Token-based** - Bearer token authentication
+
+## Authentication Flow
+
+1. Register a new user or login with existing credentials
+2. Receive an access token in the response
+3. Include the token in the `Authorization` header for all subsequent requests
+
+## Register User
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "securepassword",
+    "name": "John Doe",
+    "organization": "Acme Corp"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://your-domain.com/api/auth/register",
+    json={
+        "email": "user@example.com",
+        "password": "securepassword",
+        "name": "John Doe",
+        "organization": "Acme Corp"
+    }
+)
+
+data = response.json()
+token = data["access_token"]
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  User's email address (must be unique)
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password (will be hashed using SHA-256)
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  User's full name
+</ParamField>
+
+<ParamField body="organization" type="string">
+  Organization name (defaults to "Default Organization")
+</ParamField>
+
+### Response
+
+<ResponseField name="access_token" type="string">
+  Bearer token for authentication (32-byte URL-safe token)
+</ResponseField>
+
+<ResponseField name="token_type" type="string">
+  Always "bearer"
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  User object containing profile information
+  <Expandable title="User object properties">
+    <ResponseField name="id" type="string">
+      Unique user identifier (UUID)
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      User's email address
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      User's full name
+    </ResponseField>
+    <ResponseField name="organization" type="string">
+      User's organization
+    </ResponseField>
+    <ResponseField name="role" type="string">
+      User role ("user" or "admin")
+    </ResponseField>
+    <ResponseField name="mfa_enabled" type="boolean">
+      Whether MFA is enabled (defaults to true)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Response Example
+{
+  "access_token": "xK9mP2nQ4rS6tU8vW0xY2zA4bC6dE8fG0hI2jK4lM6nO8pQ0rS2tU4vW6xY8zA0b",
+  "token_type": "bearer",
+  "user": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "user@example.com",
+    "name": "John Doe",
+    "organization": "Acme Corp",
+    "role": "user",
+    "mfa_enabled": true
+  }
+}
+```
+
+## Login
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "securepassword"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://your-domain.com/api/auth/login",
+    json={
+        "email": "user@example.com",
+        "password": "securepassword"
+    }
+)
+
+data = response.json()
+token = data["access_token"]
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  User's email address
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  User's password
+</ParamField>
+
+### Response
+
+Returns the same `AuthToken` structure as registration.
+
+### Error Responses
+
+<ResponseField name="401" type="error">
+  Invalid credentials - Email not found or password incorrect
+</ResponseField>
+
+## SSO Login (Zitadel OIDC)
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/auth/sso \
+  -H "Content-Type: application/json" \
+  -d '{
+    "access_token": "zitadel-access-token",
+    "profile": {
+      "sub": "123456789",
+      "email": "user@example.com",
+      "name": "John Doe",
+      "picture": "https://example.com/avatar.jpg"
+    },
+    "provider": "zitadel",
+    "roles": ["user", "developer"],
+    "groups": ["engineering"]
+  }'
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="access_token" type="string" required>
+  Zitadel access token from OIDC flow
+</ParamField>
+
+<ParamField body="profile" type="object" required>
+  OIDC user profile containing email, name, sub, etc.
+</ParamField>
+
+<ParamField body="provider" type="string">
+  SSO provider name (defaults to "zitadel")
+</ParamField>
+
+<ParamField body="roles" type="array">
+  User roles from Zitadel (admin role auto-detected)
+</ParamField>
+
+<ParamField body="groups" type="array">
+  User groups from Zitadel
+</ParamField>
+
+<ParamField body="id_token" type="string">
+  Optional OIDC ID token
+</ParamField>
+
+### Role Detection
+
+The API automatically assigns the `admin` role if:
+- Any role contains "admin", "administrator", or equals "owner"
+- Any group contains "admin"
+
+Otherwise, the `user` role is assigned.
+
+## Token Exchange
+
+Exchange an authorization code for tokens (used to avoid CORS issues).
+
+```bash
+curl -X POST https://your-domain.com/api/auth/token-exchange \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "authorization-code",
+    "code_verifier": "pkce-code-verifier",
+    "redirect_uri": "https://your-app.com/callback",
+    "provider": "zitadel_onprem"
+  }'
+```
+
+### Request Body
+
+<ParamField body="code" type="string" required>
+  Authorization code from OIDC flow
+</ParamField>
+
+<ParamField body="code_verifier" type="string" required>
+  PKCE code verifier
+</ParamField>
+
+<ParamField body="redirect_uri" type="string" required>
+  OAuth redirect URI
+</ParamField>
+
+<ParamField body="provider" type="string">
+  "zitadel_onprem" or "zitadel_cloud" (defaults to "zitadel_onprem")
+</ParamField>
+
+<ParamField body="authority" type="string">
+  Optional Zitadel authority URL override
+</ParamField>
+
+<ParamField body="client_id" type="string">
+  Optional client ID override
+</ParamField>
+
+## Get Current User
+
+Retrieve the currently authenticated user's profile.
+
+```bash
+curl https://your-domain.com/api/auth/me \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Response
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "organization": "Acme Corp",
+  "role": "user",
+  "mfa_enabled": true
+}
+```
+
+## Get Current User
+
+Retrieve the profile of the currently authenticated user.
+
+```bash
+curl https://your-domain.com/api/auth/me \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Response
+
+Returns the authenticated user's profile:
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "user@example.com",
+  "name": "John Doe",
+  "organization": "Acme Corporation",
+  "role": "user",
+  "mfa_enabled": true
+}
+```
+
+<Note>
+  This endpoint is useful for validating tokens and retrieving user information for the frontend.
+</Note>
+
+## Logout
+
+Invalidate the current authentication token.
+
+```bash
+curl -X POST https://your-domain.com/api/auth/logout \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Response
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+## Using the Token
+
+Include the access token in all authenticated requests:
+
+```bash
+curl https://your-domain.com/api/workspaces \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Token Format
+
+Tokens are 32-byte URL-safe strings generated using Python's `secrets.token_urlsafe(32)`.
+
+<Warning>
+  **Security Note**: In production, tokens are stored in-memory. Consider using Redis or a database for distributed systems.
+</Warning>
+
+## Error Responses
+
+<ResponseField name="400" type="error">
+  Email already registered (for registration)
+</ResponseField>
+
+<ResponseField name="401" type="error">
+  Not authenticated - Missing or invalid Authorization header
+</ResponseField>
+
+<ResponseField name="401" type="error">
+  Invalid token - Token not found in active tokens
+</ResponseField>
+
+<ResponseField name="401" type="error">
+  Invalid credentials - Wrong email or password
+</ResponseField>
+
+<ResponseField name="502" type="error">
+  Failed to connect to Zitadel (for SSO/token exchange)
+</ResponseField>

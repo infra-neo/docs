@@ -1,0 +1,443 @@
+---
+title: 'Policies'
+description: 'Security policy management endpoints for listing and toggling enforcement policies'
+---
+
+# Policies API
+
+Policies define security rules and enforcement mechanisms for the NeoSC platform. Admins can view and toggle policies to control access, network security, and session behavior.
+
+## Policy Model
+
+<ResponseField name="id" type="string">
+  Unique policy identifier (e.g., "pol-mfa-required")
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Human-readable policy name
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Detailed description of what the policy enforces
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Policy category: `"access"`, `"network"`, `"session"`
+</ResponseField>
+
+<ResponseField name="rules" type="array">
+  Array of rule strings describing specific enforcement actions
+</ResponseField>
+
+<ResponseField name="enabled" type="boolean">
+  Whether the policy is currently active (defaults to true)
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime">
+  Timestamp when the policy was created (ISO 8601 format)
+</ResponseField>
+
+## List Policies
+
+Retrieve all security policies.
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/policies \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    "https://your-domain.com/api/policies",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+policies = response.json()
+for policy in policies:
+    status = "✓ Enabled" if policy['enabled'] else "✗ Disabled"
+    print(f"{status} - {policy['name']} ({policy['type']})")
+    print(f"  {policy['description']}")
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-domain.com/api/policies', {
+  headers: {
+    'Authorization': `Bearer ${token}`
+  }
+});
+
+const policies = await response.json();
+policies.forEach(policy => {
+  console.log(`${policy.name}: ${policy.enabled ? 'Enabled' : 'Disabled'}`);
+});
+```
+</CodeGroup>
+
+### Response
+
+```json
+[
+  {
+    "id": "pol-mfa-required",
+    "name": "MFA Required",
+    "description": "Enforce multi-factor authentication for all users",
+    "type": "access",
+    "rules": [
+      "Require MFA for login",
+      "WebAuthn preferred",
+      "TOTP as fallback"
+    ],
+    "enabled": true,
+    "created_at": "2026-03-01T10:00:00.000Z"
+  },
+  {
+    "id": "pol-network-zero-trust",
+    "name": "Zero Trust Network",
+    "description": "All connections through encrypted NetBird tunnels",
+    "type": "network",
+    "rules": [
+      "No direct connections",
+      "WireGuard encryption",
+      "Identity verification"
+    ],
+    "enabled": true,
+    "created_at": "2026-03-01T10:00:00.000Z"
+  },
+  {
+    "id": "pol-session-recording",
+    "name": "Session Recording",
+    "description": "Record all workspace sessions for audit",
+    "type": "session",
+    "rules": [
+      "Record screen activity",
+      "Log keystrokes for audit",
+      "30-day retention"
+    ],
+    "enabled": true,
+    "created_at": "2026-03-01T10:00:00.000Z"
+  }
+]
+```
+
+## Default Policies
+
+If no policies exist in the database, the API automatically creates 3 default policies:
+
+### 1. MFA Required (Access Policy)
+
+- **ID**: `pol-mfa-required`
+- **Type**: `access`
+- **Rules**:
+  - Require MFA for login
+  - WebAuthn preferred
+  - TOTP as fallback
+
+### 2. Zero Trust Network (Network Policy)
+
+- **ID**: `pol-network-zero-trust`
+- **Type**: `network`
+- **Rules**:
+  - No direct connections
+  - WireGuard encryption
+  - Identity verification
+
+### 3. Session Recording (Session Policy)
+
+- **ID**: `pol-session-recording`
+- **Type**: `session`
+- **Rules**:
+  - Record screen activity
+  - Log keystrokes for audit
+  - 30-day retention
+
+## Toggle Policy
+
+Enable or disable a policy. This endpoint toggles the current state.
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH https://your-domain.com/api/policies/pol-mfa-required \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```python Python
+import requests
+
+policy_id = "pol-mfa-required"
+
+response = requests.patch(
+    f"https://your-domain.com/api/policies/{policy_id}",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+data = response.json()
+print(f"{data['message']}")
+print(f"Policy is now: {'Enabled' if data['enabled'] else 'Disabled'}")
+```
+
+```javascript JavaScript
+const policyId = 'pol-mfa-required';
+
+const response = await fetch(
+  `https://your-domain.com/api/policies/${policyId}`,
+  {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  }
+);
+
+const data = await response.json();
+console.log(data.message);
+console.log(`Enabled: ${data.enabled}`);
+```
+</CodeGroup>
+
+### Response
+
+```json
+{
+  "message": "Policy disabled",
+  "enabled": false
+}
+```
+
+Or when enabling:
+
+```json
+{
+  "message": "Policy enabled",
+  "enabled": true
+}
+```
+
+### Automatic Actions
+
+When a policy is toggled:
+
+1. Policy `enabled` status is flipped (true → false or false → true)
+2. Audit log entry is created: `"toggle_policy"` action
+3. Details include whether policy was enabled or disabled
+
+### Error Responses
+
+<ResponseField name="404" type="error">
+  ```json
+  {
+    "detail": "Policy not found"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="401" type="error">
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+</ResponseField>
+
+## Policy Types
+
+### Access Policies
+
+Control authentication and authorization:
+
+- Multi-factor authentication requirements
+- Password policies
+- Session timeout rules
+- Login attempt limits
+
+**Example**: `pol-mfa-required`
+
+### Network Policies
+
+Define network security rules:
+
+- VPN/tunnel requirements
+- Encryption standards
+- IP allowlists/denylists
+- Zero-trust networking
+
+**Example**: `pol-network-zero-trust`
+
+### Session Policies
+
+Govern workspace session behavior:
+
+- Session recording
+- Activity logging
+- Idle timeout
+- Data retention
+
+**Example**: `pol-session-recording`
+
+## Example: Policy Management Dashboard
+
+```python
+import requests
+from typing import List, Dict
+
+BASE_URL = "https://your-domain.com/api"
+
+class PolicyManager:
+    def __init__(self, token: str):
+        self.headers = {"Authorization": f"Bearer {token}"}
+    
+    def list_policies(self) -> List[Dict]:
+        """Get all policies"""
+        response = requests.get(
+            f"{BASE_URL}/policies",
+            headers=self.headers
+        )
+        return response.json()
+    
+    def toggle_policy(self, policy_id: str) -> Dict:
+        """Toggle a policy on/off"""
+        response = requests.patch(
+            f"{BASE_URL}/policies/{policy_id}",
+            headers=self.headers
+        )
+        return response.json()
+    
+    def get_enabled_policies(self) -> List[Dict]:
+        """Get only enabled policies"""
+        policies = self.list_policies()
+        return [p for p in policies if p['enabled']]
+    
+    def get_policies_by_type(self, policy_type: str) -> List[Dict]:
+        """Get policies of a specific type"""
+        policies = self.list_policies()
+        return [p for p in policies if p['type'] == policy_type]
+    
+    def display_policy_status(self):
+        """Display all policies with their status"""
+        policies = self.list_policies()
+        
+        print("\n=== Security Policies ===")
+        for policy in policies:
+            status = "✓ ENABLED" if policy['enabled'] else "✗ DISABLED"
+            print(f"\n{status} - {policy['name']}")
+            print(f"  Type: {policy['type'].upper()}")
+            print(f"  Description: {policy['description']}")
+            print(f"  Rules:")
+            for rule in policy['rules']:
+                print(f"    - {rule}")
+
+# Usage
+manager = PolicyManager(token="your-token-here")
+
+# Display all policies
+manager.display_policy_status()
+
+# Get only access policies
+access_policies = manager.get_policies_by_type("access")
+print(f"\nAccess policies: {len(access_policies)}")
+
+# Disable MFA requirement (not recommended!)
+result = manager.toggle_policy("pol-mfa-required")
+print(f"\n{result['message']}")
+```
+
+## Example: Audit Policy Changes
+
+```python
+import requests
+
+def audit_policy_changes(token: str):
+    """View all policy change events in audit logs"""
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    # Get audit logs
+    logs = requests.get(
+        "https://your-domain.com/api/audit-logs",
+        headers=headers
+    ).json()
+    
+    # Filter for policy actions
+    policy_logs = [
+        log for log in logs 
+        if log['action'] == 'toggle_policy'
+    ]
+    
+    print("\n=== Policy Change History ===")
+    for log in policy_logs:
+        print(f"\n{log['timestamp']}")
+        print(f"  User: {log['user_email']}")
+        print(f"  Resource: {log['resource']}")
+        print(f"  Action: {log['details']}")
+        print(f"  Success: {log['success']}")
+
+# Usage
+audit_policy_changes(token="your-token-here")
+```
+
+## Security Best Practices
+
+<Warning>
+  **Critical Policies**: The following policies should remain enabled in production:
+  - **MFA Required**: Protects against credential theft
+  - **Zero Trust Network**: Ensures all connections are encrypted
+  - **Session Recording**: Required for compliance and audit trails
+</Warning>
+
+<Tip>
+  Policy changes are logged in audit logs. Always review audit logs after making policy changes to ensure they were applied correctly.
+</Tip>
+
+## Current Limitations
+
+<Info>
+  The current API provides **toggle-only** functionality. The following operations are not yet implemented:
+  - Creating custom policies (`POST /policies`)
+  - Updating policy rules (`PUT /policies/{id}`)
+  - Deleting policies (`DELETE /policies/{id}`)
+  - Policy versioning
+  - Policy templates
+</Info>
+
+## Integration with Audit Logs
+
+All policy changes are tracked in audit logs:
+
+```bash
+# View audit logs
+curl https://your-domain.com/api/audit-logs \
+  -H "Authorization: Bearer your-token-here"
+```
+
+Policy-related audit log entries:
+
+```json
+{
+  "id": "log-123",
+  "user_id": "user-456",
+  "user_email": "admin@example.com",
+  "action": "toggle_policy",
+  "resource": "policy:pol-mfa-required",
+  "details": "Policy disabled",
+  "timestamp": "2026-03-05T14:30:00.000Z",
+  "success": true
+}
+```
+
+## Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Audit Logs" icon="clipboard-list" href="/api/audit-logs">
+    View policy change history
+  </Card>
+  <Card title="Users" icon="users" href="/api/users">
+    User authentication affected by access policies
+  </Card>
+  <Card title="Sessions" icon="plug" href="/api/sessions">
+    Sessions governed by session policies
+  </Card>
+  <Card title="Workspaces" icon="desktop" href="/api/workspaces">
+    Workspaces protected by network policies
+  </Card>
+</CardGroup>

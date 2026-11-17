@@ -1,0 +1,525 @@
+---
+title: 'Workspaces'
+description: 'Workspace management endpoints for listing, creating, updating, launching, and stopping secure workspaces'
+---
+
+# Workspaces API
+
+Workspaces represent virtual environments that users can launch and access. Each workspace can be a Linux desktop, Windows RDP session, web application, or secure browser.
+
+## Workspace Model
+
+<ResponseField name="id" type="string">
+  Unique workspace identifier (e.g., "ws-sap-neogenesys")
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the workspace
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Workspace type: `"html5"`, `"rdp"`, `"web"`, `"linux"`, `"browser"`, `"windows"`, `"dev"`, `"admin"`
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Detailed description of the workspace and its purpose
+</ResponseField>
+
+<ResponseField name="image_url" type="string">
+  Thumbnail image URL for the workspace
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current status: `"available"`, `"running"`, `"stopped"`, `"error"`
+</ResponseField>
+
+<ResponseField name="cpu" type="string">
+  CPU allocation (e.g., "2 vCPU", "4 vCPU")
+</ResponseField>
+
+<ResponseField name="memory" type="string">
+  Memory allocation (e.g., "4 GB", "8 GB")
+</ResponseField>
+
+<ResponseField name="storage" type="string">
+  Storage allocation (e.g., "50 GB", "100 GB")
+</ResponseField>
+
+<ResponseField name="url" type="string">
+  Connection URL for the workspace (if applicable)
+</ResponseField>
+
+<ResponseField name="connection_type" type="string">
+  Connection method: `"html5"`, `"web"`, `"vnc"`, `"browser"`
+</ResponseField>
+
+<ResponseField name="requires_netbird" type="boolean">
+  Whether NetBird VPN connection is required
+</ResponseField>
+
+<ResponseField name="icon" type="string">
+  Icon identifier for UI display
+</ResponseField>
+
+## List Workspaces
+
+Retrieve all available workspaces for the authenticated user.
+
+```bash
+curl https://your-domain.com/api/workspaces \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Response
+
+```json
+[
+  {
+    "id": "ws-sap-neogenesys",
+    "name": "SAP Neogénesys",
+    "type": "html5",
+    "description": "TSPlus HTML5 Desktop para acceso a SAP. Requiere conexión NetBird activa.",
+    "image_url": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=400",
+    "status": "available",
+    "cpu": "4 vCPU",
+    "memory": "8 GB",
+    "storage": "100 GB",
+    "url": "http://tsplus.intranet.neosc/",
+    "connection_type": "html5",
+    "requires_netbird": true,
+    "icon": "sap"
+  },
+  {
+    "id": "ws-remote-desktop",
+    "name": "Remote Desktop",
+    "type": "rdp",
+    "description": "Escritorio remoto Windows via TSPlus HTML5. IP: 10.100.10.152",
+    "image_url": "https://images.unsplash.com/photo-1624571409108-e9a41746af53?w=400",
+    "status": "available",
+    "cpu": "4 vCPU",
+    "memory": "8 GB",
+    "storage": "100 GB",
+    "url": "http://10.100.10.152/",
+    "connection_type": "html5",
+    "requires_netbird": true,
+    "icon": "windows"
+  }
+]
+```
+
+### Default Workspaces
+
+If no workspaces exist in the database, the API automatically initializes 5 default workspaces:
+
+1. **SAP Neogénesys** (HTML5) - TSPlus Desktop for SAP access
+2. **Remote Desktop** (RDP) - Windows remote desktop
+3. **1Panel Admin** (Web) - Infrastructure admin panel
+4. **Linux Desktop** (Linux) - Ubuntu 22.04 LTS desktop
+5. **Secure Browser** (Browser) - Isolated browser environment
+
+## Create Workspace
+
+Create a new workspace. Requires admin privileges.
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/workspaces \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Development Environment",
+    "type": "dev",
+    "description": "Full-stack development workspace with VSCode",
+    "url": "http://dev.example.com",
+    "connection_type": "web",
+    "requires_netbird": true,
+    "cpu": "4 vCPU",
+    "memory": "16 GB",
+    "storage": "200 GB",
+    "image_url": "https://images.unsplash.com/photo-1587620962725-abab7fe55159?w=400",
+    "icon": "code"
+  }'
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://your-domain.com/api/workspaces",
+    headers={
+        "Authorization": f"Bearer {admin_token}",
+        "Content-Type": "application/json"
+    },
+    json={
+        "name": "Development Environment",
+        "type": "dev",
+        "description": "Full-stack development workspace with VSCode",
+        "url": "http://dev.example.com",
+        "connection_type": "web",
+        "requires_netbird": True,
+        "cpu": "4 vCPU",
+        "memory": "16 GB",
+        "storage": "200 GB",
+        "image_url": "https://images.unsplash.com/photo-1587620962725-abab7fe55159?w=400",
+        "icon": "code"
+    }
+)
+
+workspace = response.json()
+print(f"Created workspace: {workspace['workspace']['name']}")
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Workspace display name
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Workspace type (e.g., "linux", "windows", "browser", "dev", "admin")
+</ParamField>
+
+<ParamField body="description" type="string" required>
+  Detailed description of the workspace
+</ParamField>
+
+<ParamField body="url" type="string">
+  Connection URL (defaults to empty string)
+</ParamField>
+
+<ParamField body="connection_type" type="string">
+  Connection method: "web", "html5", "vnc", "browser" (defaults to "web")
+</ParamField>
+
+<ParamField body="requires_netbird" type="boolean">
+  Whether NetBird VPN is required (defaults to true)
+</ParamField>
+
+<ParamField body="cpu" type="string">
+  CPU allocation (defaults to "2 vCPU")
+</ParamField>
+
+<ParamField body="memory" type="string">
+  Memory allocation (defaults to "4 GB")
+</ParamField>
+
+<ParamField body="storage" type="string">
+  Storage allocation (defaults to "50 GB")
+</ParamField>
+
+<ParamField body="image_url" type="string">
+  Thumbnail image URL (defaults to empty string)
+</ParamField>
+
+<ParamField body="icon" type="string">
+  Icon identifier (defaults to "default")
+</ParamField>
+
+### Response
+
+```json
+{
+  "message": "Workspace created",
+  "workspace": {
+    "id": "ws-a1b2c3d4",
+    "name": "Development Environment",
+    "type": "dev",
+    "description": "Full-stack development workspace with VSCode",
+    "url": "http://dev.example.com",
+    "connection_type": "web",
+    "requires_netbird": true,
+    "cpu": "4 vCPU",
+    "memory": "16 GB",
+    "storage": "200 GB",
+    "status": "available",
+    "image_url": "https://images.unsplash.com/photo-1587620962725-abab7fe55159?w=400",
+    "icon": "code"
+  }
+}
+```
+
+### Error Responses
+
+<ResponseField name="403" type="error">
+  ```json
+  {
+    "detail": "Admin access required"
+  }
+  ```
+</ResponseField>
+
+## Update Workspace
+
+Update workspace configuration. Requires admin privileges.
+
+```bash
+curl -X PUT https://your-domain.com/api/workspaces/ws-a1b2c3d4 \
+  -H "Authorization: Bearer admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cpu": "8 vCPU",
+    "memory": "32 GB",
+    "status": "available"
+  }'
+```
+
+### Request Body
+
+All fields are optional. Only provided fields will be updated.
+
+<ParamField body="name" type="string">
+  Updated workspace name
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description
+</ParamField>
+
+<ParamField body="url" type="string">
+  Updated connection URL
+</ParamField>
+
+<ParamField body="connection_type" type="string">
+  Updated connection type
+</ParamField>
+
+<ParamField body="requires_netbird" type="boolean">
+  Updated NetBird requirement
+</ParamField>
+
+<ParamField body="cpu" type="string">
+  Updated CPU allocation
+</ParamField>
+
+<ParamField body="memory" type="string">
+  Updated memory allocation
+</ParamField>
+
+<ParamField body="storage" type="string">
+  Updated storage allocation
+</ParamField>
+
+<ParamField body="image_url" type="string">
+  Updated image URL
+</ParamField>
+
+<ParamField body="icon" type="string">
+  Updated icon identifier
+</ParamField>
+
+<ParamField body="status" type="string">
+  Updated status ("available", "running", "stopped", "error")
+</ParamField>
+
+### Response
+
+```json
+{
+  "message": "Workspace updated",
+  "workspace": {
+    "id": "ws-a1b2c3d4",
+    "cpu": "8 vCPU",
+    "memory": "32 GB",
+    "status": "available"
+    // ... other fields
+  }
+}
+```
+
+### Error Responses
+
+<ResponseField name="403" type="error">
+  Admin access required
+</ResponseField>
+
+<ResponseField name="404" type="error">
+  ```json
+  {
+    "detail": "Workspace not found"
+  }
+  ```
+</ResponseField>
+
+## Delete Workspace
+
+Delete a workspace. Requires admin privileges.
+
+```bash
+curl -X DELETE https://your-domain.com/api/workspaces/ws-a1b2c3d4 \
+  -H "Authorization: Bearer admin-token"
+```
+
+### Response
+
+```json
+{
+  "message": "Workspace deleted"
+}
+```
+
+### Error Responses
+
+<ResponseField name="403" type="error">
+  Admin access required
+</ResponseField>
+
+<ResponseField name="404" type="error">
+  Workspace not found
+</ResponseField>
+
+## Launch Workspace
+
+Launch a workspace and create a new session.
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/workspaces/ws-sap-neogenesys/launch \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    "https://your-domain.com/api/workspaces/ws-sap-neogenesys/launch",
+    headers={"Authorization": f"Bearer {token}"}
+)
+
+data = response.json()
+print(f"Session ID: {data['session_id']}")
+print(f"Stream URL: {data['stream_url']}")
+print(f"Encryption: {data['tunnel_status']}")
+```
+</CodeGroup>
+
+### Response
+
+```json
+{
+  "session_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "workspace": {
+    "id": "ws-sap-neogenesys",
+    "name": "SAP Neogénesys",
+    "type": "html5",
+    "status": "running",
+    // ... other workspace fields
+  },
+  "stream_url": "/viewer/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "tunnel_status": "encrypted",
+  "security": {
+    "encrypted_tunnel": true,
+    "identity_verified": true,
+    "mfa_enforced": true,
+    "session_recording": true,
+    "no_open_ports": true
+  }
+}
+```
+
+### Automatic Actions
+
+When a workspace is launched:
+
+1. New session is created with user info
+2. Workspace status is updated to `"running"`
+3. Audit log entry is created: `"launch_workspace"` action
+4. Security features are enforced
+
+### Error Responses
+
+<ResponseField name="404" type="error">
+  ```json
+  {
+    "detail": "Workspace not found"
+  }
+  ```
+</ResponseField>
+
+## Stop Workspace
+
+Stop a running workspace and terminate the session.
+
+```bash
+curl -X POST https://your-domain.com/api/workspaces/ws-sap-neogenesys/stop \
+  -H "Authorization: Bearer your-token-here"
+```
+
+### Response
+
+```json
+{
+  "message": "Workspace stopped successfully"
+}
+```
+
+### Automatic Actions
+
+When a workspace is stopped:
+
+1. Active session is marked as `"terminated"`
+2. Session `ended_at` timestamp is set
+3. Workspace status is updated to `"available"`
+4. Audit log entry is created: `"stop_workspace"` action
+
+## Reset Workspaces
+
+Reset all workspaces to default configuration. Requires admin privileges.
+
+```bash
+curl -X POST https://your-domain.com/api/workspaces/reset \
+  -H "Authorization: Bearer admin-token"
+```
+
+### Response
+
+```json
+{
+  "message": "Workspaces reset to defaults",
+  "count": 5
+}
+```
+
+### Automatic Actions
+
+1. All existing workspaces are deleted
+2. 5 default workspaces are recreated
+3. Audit log entry is created: `"reset_workspaces"` action
+
+### Error Responses
+
+<ResponseField name="403" type="error">
+  Admin access required
+</ResponseField>
+
+## Workspace Types
+
+| Type | Description | Example Use Case |
+|------|-------------|------------------|
+| `html5` | HTML5-based desktop | TSPlus remote desktop |
+| `rdp` | Remote Desktop Protocol | Windows servers |
+| `web` | Web application | Admin panels, dashboards |
+| `linux` | Linux desktop environment | Ubuntu desktop |
+| `browser` | Isolated browser | Secure web browsing |
+| `windows` | Windows environment | Windows applications |
+| `dev` | Development environment | Code editors, IDEs |
+| `admin` | Administrative tools | System management |
+
+## Connection Types
+
+| Type | Description | Protocol |
+|------|-------------|----------|
+| `html5` | Browser-based HTML5 | HTTP/WebSockets |
+| `web` | Direct web access | HTTP/HTTPS |
+| `vnc` | VNC remote desktop | VNC over WebSockets |
+| `browser` | Isolated browser session | Custom protocol |
+
+## Security Features
+
+All workspace launches enforce:
+
+- **Encrypted Tunnel**: WireGuard VPN via NetBird
+- **Identity Verification**: JWT token validation
+- **MFA Enforcement**: Based on user settings
+- **Session Recording**: All activity logged
+- **No Open Ports**: Zero-trust network model

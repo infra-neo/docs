@@ -1,0 +1,639 @@
+---
+title: Docker Compose Setup
+description: Service orchestration, networking, and configuration for the NeoSC infrastructure stack
+---
+
+## Overview
+
+NeoSC uses Docker Compose to orchestrate all infrastructure services. The stack includes Pomerium (Zero Trust proxy), frontend (React SPA), backend (FastAPI), and MongoDB, all connected via isolated Docker networks.
+
+## Stack Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      External Traffic                         │
+└────────────────────────┬─────────────────────────────────────┘
+                         │ :443, :80
+                         ▼
+              ┌──────────────────────┐
+              │     Pomerium         │  Zero Trust Proxy
+              │  (proxy + internal)  │  Authentication + Routing
+              └──────────┬───────────┘
+                         │
+         ┌───────────────┴───────────────┐
+         │   Internal Network (isolated) │
+         │                               │
+    ┌────▼────┐    ┌────▼────┐    ┌────▼────┐
+    │Frontend │    │Backend  │    │ MongoDB │
+    │  :3000  │    │  :8001  │    │ :27017  │
+    └─────────┘    └────┬────┘    └─────────┘
+                        │
+                        └──────▶ MongoDB
+```
+
+## Docker Compose File
+
+Located at `infra/docker-compose.yml`:
+
+<Tabs>
+  <Tab title="Full Configuration">
+    ```yaml
+    version: "3.9"
+
+    # Networks
+    networks:
+      proxy:
+        # Public network: Pomerium ↔ external world
+        driver: bridge
+      internal:
+        # Private network: services not exposed externally
+        driver: bridge
+        internal: true
+
+    # Volumes
+    volumes:
+      mongo_data:
+      pomerium_cache:
+
+    # Services
+    services:
+
+      # Pomerium - Zero Trust Proxy
+      pomerium:
+        image: pomerium/pomerium:latest
+        container_name: pomerium
+        restart: unless-stopped
+        networks:
+          - proxy
+          - internal  # On both networks
+        ports:
+          - "443:443"
+          - "80:80"   # Redirect to 443
+        volumes:
+          - ./pomerium/config.yaml:/etc/pomerium/config.yaml:ro
+        env_file:
+          - .env
+        environment:
+          ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID}
+          ZITADEL_CLIENT_SECRET: ${ZITADEL_CLIENT_SECRET}
+          POMERIUM_SHARED_SECRET: ${POMERIUM_SHARED_SECRET}
+          POMERIUM_COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET}
+        healthcheck:
+          test: ["CMD", "wget", "-qO-", "http://localhost:5080/ping"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 15s
+        depends_on:
+          - frontend
+          - backend
+
+      # Frontend - React SPA
+      frontend:
+        build:
+          context: ../frontend
+          dockerfile: Dockerfile
+        container_name: neosc-frontend
+        restart: unless-stopped
+        networks:
+          - internal
+        environment:
+          REACT_APP_API_URL: https://api.portal.kappa4.com
+          REACT_APP_ZITADEL_AUTHORITY: https://manager.kappa4.com
+          REACT_APP_ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID}
+          REACT_APP_ZITADEL_PROJECT_ID: ${ZITADEL_PROJECT_ID}
+          REACT_APP_PORTAL_URL: https://portal.kappa4.com
+          REACT_APP_GATE_URL: https://gate.kappa4.com
+        healthcheck:
+          test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+          interval: 30s
+          timeout: 5s
+          retries: 3
+
+      # Backend - FastAPI
+      backend:
+        build:
+          context: ../backend
+          dockerfile: Dockerfile
+        container_name: neosc-backend
+        restart: unless-stopped
+        networks:
+          - internal
+        environment:
+          MONGO_URL: mongodb://mongo:27017/neosc
+          ZITADEL_AUTHORITY: https://manager.kappa4.com
+          ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID}
+          ZITADEL_CLIENT_SECRET: ${ZITADEL_CLIENT_SECRET}
+          ZITADEL_PROJECT_ID: ${ZITADEL_PROJECT_ID}
+          TRUST_POMERIUM_HEADERS: "true"
+          PORTAL_URL: https://portal.kappa4.com
+          JWT_SECRET: ${JWT_SECRET}
+        depends_on:
+          - mongo
+        healthcheck:
+          test: ["CMD", "wget", "-qO-", "http://localhost:8001/health"]
+          interval: 30s
+          timeout: 5s
+          retries: 3
+
+      # MongoDB
+      mongo:
+        image: mongo:7
+        container_name: neosc-mongo
+        restart: unless-stopped
+        networks:
+          - internal
+        volumes:
+          - mongo_data:/data/db
+        environment:
+          MONGO_INITDB_DATABASE: neosc
+        healthcheck:
+          test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+          start_period: 20s
+    ```
+  </Tab>
+  <Tab title="Networks">
+    ```yaml
+    networks:
+      proxy:
+        # Public-facing network
+        # Only Pomerium is on this network
+        driver: bridge
+      
+      internal:
+        # Private internal network
+        # No external connectivity allowed
+        driver: bridge
+        internal: true  # Critical: blocks external access
+    ```
+    
+    **Key points**:
+    - `proxy` network connects Pomerium to the internet
+    - `internal` network isolates backend services
+    - `internal: true` prevents services from accessing external internet
+    - Pomerium bridges both networks (acts as gateway)
+  </Tab>
+  <Tab title="Volumes">
+    ```yaml
+    volumes:
+      mongo_data:
+        # Persistent MongoDB data
+        # Survives container restarts
+      
+      pomerium_cache:
+        # Pomerium session cache (optional)
+    ```
+    
+    **Data persistence**:
+    ```bash
+    # Backup MongoDB volume
+    docker run --rm \
+      -v infra_mongo_data:/data \
+      -v $(pwd):/backup \
+      alpine tar czf /backup/mongo-backup.tar.gz /data
+    
+    # Restore MongoDB volume
+    docker run --rm \
+      -v infra_mongo_data:/data \
+      -v $(pwd):/backup \
+      alpine tar xzf /backup/mongo-backup.tar.gz -C /
+    ```
+  </Tab>
+</Tabs>
+
+## Services
+
+### Pomerium
+
+**Purpose**: Zero Trust reverse proxy and authentication gateway
+
+```yaml
+pomerium:
+  image: pomerium/pomerium:latest
+  container_name: pomerium
+  restart: unless-stopped
+  networks:
+    - proxy      # External access
+    - internal   # Backend access
+  ports:
+    - "443:443"  # HTTPS
+    - "80:80"    # HTTP (redirects to 443)
+  volumes:
+    - ./pomerium/config.yaml:/etc/pomerium/config.yaml:ro
+  environment:
+    ZITADEL_CLIENT_ID: ${ZITADEL_CLIENT_ID}
+    ZITADEL_CLIENT_SECRET: ${ZITADEL_CLIENT_SECRET}
+    POMERIUM_SHARED_SECRET: ${POMERIUM_SHARED_SECRET}
+    POMERIUM_COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET}
+```
+
+**Key features**:
+- Bridges public and internal networks
+- Only service with external ports exposed
+- Health check endpoint at `:5080/ping`
+- Depends on frontend and backend being ready
+
+### Frontend
+
+**Purpose**: React SPA serving the user interface
+
+```yaml
+frontend:
+  build:
+    context: ../frontend
+    dockerfile: Dockerfile
+  container_name: neosc-frontend
+  restart: unless-stopped
+  networks:
+    - internal  # Only on private network
+  environment:
+    REACT_APP_API_URL: https://api.portal.kappa4.com
+    REACT_APP_PORTAL_URL: https://portal.kappa4.com
+```
+
+**Key features**:
+- No external ports exposed
+- Accessed only via Pomerium
+- Built-in nginx server on port 3000
+- Environment variables injected at build time
+
+**Build process**:
+
+```dockerfile
+# frontend/Dockerfile
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /app/build /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 3000
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+### Backend
+
+**Purpose**: FastAPI REST API server
+
+```yaml
+backend:
+  build:
+    context: ../backend
+    dockerfile: Dockerfile
+  container_name: neosc-backend
+  restart: unless-stopped
+  networks:
+    - internal
+  environment:
+    MONGO_URL: mongodb://mongo:27017/neosc
+    TRUST_POMERIUM_HEADERS: "true"
+    JWT_SECRET: ${JWT_SECRET}
+  depends_on:
+    - mongo
+```
+
+**Key features**:
+- Connects to MongoDB on internal network
+- Trusts `X-Pomerium-*` headers for authentication
+- Health check at `/health` endpoint
+- No external ports exposed
+
+**Environment variables**:
+
+| Variable | Purpose | Example |
+|----------|---------|----------|
+| `MONGO_URL` | MongoDB connection string | `mongodb://mongo:27017/neosc` |
+| `TRUST_POMERIUM_HEADERS` | Trust identity headers from Pomerium | `true` |
+| `ZITADEL_AUTHORITY` | Zitadel OIDC issuer URL | `https://manager.kappa4.com` |
+| `JWT_SECRET` | Secret for signing internal JWTs | `<random-secret>` |
+
+### MongoDB
+
+**Purpose**: Document database for application data
+
+```yaml
+mongo:
+  image: mongo:7
+  container_name: neosc-mongo
+  restart: unless-stopped
+  networks:
+    - internal
+  volumes:
+    - mongo_data:/data/db
+  environment:
+    MONGO_INITDB_DATABASE: neosc
+```
+
+**Key features**:
+- Persistent volume for data
+- Health check using `mongosh`
+- Only accessible from internal network
+- No authentication (network isolation provides security)
+
+<Warning>
+  For production, enable MongoDB authentication:
+  ```yaml
+  environment:
+    MONGO_INITDB_ROOT_USERNAME: admin
+    MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+  ```
+</Warning>
+
+## Networking Details
+
+### Network Isolation
+
+```bash
+# Inspect networks
+docker network inspect infra_proxy
+docker network inspect infra_internal
+
+# Verify internal network has no external gateway
+docker network inspect infra_internal | jq '.[0].IPAM.Config'
+# Output: [{"Subnet": "172.20.0.0/16"}]  # No Gateway
+```
+
+### Service Discovery
+
+Services communicate using Docker's built-in DNS:
+
+```python
+# Backend connects to MongoDB using service name
+MONGO_URL = "mongodb://mongo:27017/neosc"
+#                      ^^^^^ - Docker service name
+
+# Pomerium proxies to frontend using service name
+# In pomerium/config.yaml:
+# to: http://frontend:3000
+#            ^^^^^^^^ - Docker service name
+```
+
+### Port Mapping
+
+| Service | Internal Port | External Port | Access |
+|---------|---------------|---------------|--------|
+| Pomerium | 443 | 443 | Public (via domain) |
+| Pomerium | 80 | 80 | Public (redirects to 443) |
+| Pomerium | 5080 | - | Health check (internal) |
+| Frontend | 3000 | - | Via Pomerium only |
+| Backend | 8001 | - | Via Pomerium only |
+| MongoDB | 27017 | - | Via backend only |
+
+## Deployment Commands
+
+### Start Stack
+
+```bash
+# Start all services
+cd infra/
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Check service status
+docker compose ps
+```
+
+### Stop Stack
+
+```bash
+# Stop services (preserve data)
+docker compose stop
+
+# Stop and remove containers (preserve data)
+docker compose down
+
+# Stop and remove containers + volumes (DELETE DATA)
+docker compose down -v
+```
+
+### Update Services
+
+```bash
+# Rebuild and restart specific service
+docker compose up -d --build frontend
+
+# Pull latest images
+docker compose pull
+
+# Restart all with new images
+docker compose up -d
+```
+
+### View Logs
+
+```bash
+# All services
+docker compose logs -f
+
+# Specific service
+docker compose logs -f backend
+
+# Last 100 lines
+docker compose logs --tail=100 pomerium
+
+# Since timestamp
+docker compose logs --since 2026-03-05T10:00:00 frontend
+```
+
+## Health Checks
+
+All services define health checks for monitoring:
+
+```bash
+# Check health status
+docker compose ps
+
+# Output:
+# NAME              STATUS                    HEALTH
+# pomerium          Up 5 minutes (healthy)
+# neosc-frontend    Up 5 minutes (healthy)
+# neosc-backend     Up 5 minutes (healthy)
+# neosc-mongo       Up 5 minutes (healthy)
+```
+
+### Manual Health Checks
+
+```bash
+# Pomerium
+docker exec pomerium wget -qO- http://localhost:5080/ping
+# Output: OK
+
+# Frontend
+docker exec neosc-frontend wget -qO- http://localhost:3000
+# Output: <!DOCTYPE html>...
+
+# Backend
+docker exec neosc-backend wget -qO- http://localhost:8001/health
+# Output: {"status": "healthy"}
+
+# MongoDB
+docker exec neosc-mongo mongosh --eval "db.adminCommand('ping')"
+# Output: { ok: 1 }
+```
+
+## Resource Limits
+
+For production, add resource limits:
+
+```yaml
+# docker-compose.prod.yml
+services:
+  frontend:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+  
+  backend:
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+  
+  mongo:
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+```
+
+Deploy with limits:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+## Environment Variables
+
+Create `infra/.env` with required variables:
+
+```bash
+# Zitadel Configuration
+ZITADEL_CLIENT_ID=<client-id>
+ZITADEL_CLIENT_SECRET=<client-secret>
+ZITADEL_PROJECT_ID=<project-id>
+
+# Pomerium Secrets
+POMERIUM_SHARED_SECRET=<base64-secret>
+POMERIUM_COOKIE_SECRET=<base64-secret>
+
+# Backend Configuration
+JWT_SECRET=<base64-secret>
+
+# MongoDB (optional)
+MONGO_PASSWORD=<strong-password>
+```
+
+Generate secrets:
+
+```bash
+# Generate Pomerium secrets
+echo "POMERIUM_SHARED_SECRET=$(openssl rand -base64 32)"
+echo "POMERIUM_COOKIE_SECRET=$(openssl rand -base64 32)"
+echo "JWT_SECRET=$(openssl rand -base64 32)"
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Service fails to start">
+    ```bash
+    # View service logs
+    docker compose logs <service-name>
+    
+    # Check service health
+    docker compose ps
+    
+    # Inspect service
+    docker inspect <container-name>
+    ```
+  </Accordion>
+  
+  <Accordion title="Cannot connect between services">
+    ```bash
+    # Test connectivity from one service to another
+    docker compose exec backend ping frontend
+    docker compose exec backend ping mongo
+    
+    # Check both services are on same network
+    docker network inspect infra_internal
+    ```
+  </Accordion>
+  
+  <Accordion title="Port already in use">
+    ```bash
+    # Find process using port
+    sudo lsof -i :443
+    sudo lsof -i :80
+    
+    # Stop conflicting service
+    sudo systemctl stop nginx  # or apache2
+    
+    # Or change Pomerium ports in docker-compose.yml
+    ports:
+      - "8443:443"
+      - "8080:80"
+    ```
+  </Accordion>
+  
+  <Accordion title="Volume permission errors">
+    ```bash
+    # Fix MongoDB volume permissions
+    sudo chown -R 999:999 /var/lib/docker/volumes/infra_mongo_data
+    
+    # Or recreate volume
+    docker compose down -v
+    docker volume rm infra_mongo_data
+    docker compose up -d
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use .env Files" icon="file">
+    Never hardcode secrets in docker-compose.yml. Use `.env` and add to `.gitignore`.
+  </Card>
+  <Card title="Health Checks" icon="heart-pulse">
+    Define health checks for all services to enable automatic restart on failure.
+  </Card>
+  <Card title="Resource Limits" icon="gauge">
+    Set CPU and memory limits in production to prevent resource exhaustion.
+  </Card>
+  <Card title="Persistent Volumes" icon="hard-drive">
+    Always use named volumes for data that should survive container recreation.
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Guide" icon="rocket" href="/infrastructure/deployment">
+    Step-by-step deployment instructions
+  </Card>
+  <Card title="Pomerium Configuration" icon="gear" href="/infrastructure/pomerium">
+    Configure Zero Trust proxy policies
+  </Card>
+</CardGroup>

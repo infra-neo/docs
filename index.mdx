@@ -1,0 +1,289 @@
+---
+title: "NeoSC Documentation"
+description: "Zero Trust cloud VDI platform with secure workspace management"
+mode: "custom"
+---
+
+<div className="relative overflow-hidden bg-gradient-to-br from-[#0066CC] via-[#003D7A] to-[#001a3d] dark:from-[#0066CC] dark:via-[#003D7A] dark:to-[#001133]">
+  <div className="absolute inset-0 bg-black/20 dark:bg-black/40"></div>
+  <div className="relative max-w-6xl mx-auto px-6 py-20 lg:py-24">
+    <div className="grid lg:grid-cols-12 gap-12 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6">
+          Secure Cloud Workspaces with Zero Trust
+        </h1>
+        <p className="text-lg sm:text-xl text-white/90 max-w-2xl mb-8">
+          NeoSC delivers enterprise-grade virtual desktop infrastructure with integrated SSO, encrypted tunneling, and comprehensive security controls. Deploy secure workspaces in minutes.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a
+            href="/quickstart"
+            className="inline-flex items-center px-6 py-3 rounded-lg bg-white text-[#0066CC] font-semibold hover:bg-gray-100 transition-colors"
+          >
+            Get Started
+            <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+            </svg>
+          </a>
+          <a
+            href="/api/overview"
+            className="inline-flex items-center px-6 py-3 rounded-lg border-2 border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors"
+          >
+            API Reference
+          </a>
+        </div>
+      </div>
+      <div className="lg:col-span-5 hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-white/5 rounded-2xl blur-2xl"></div>
+          <div className="relative bg-white/10 backdrop-blur-sm rounded-2xl p-8 border border-white/20">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse"></div>
+                <span className="text-white font-semibold">Zero Trust Active</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-blue-400"></div>
+                <span className="text-white/90">Encrypted Tunnel</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-purple-400"></div>
+                <span className="text-white/90">MFA Verified</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                <span className="text-white/90">Session Recording</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Get Started in Minutes
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Deploy your first secure workspace and connect users with SSO authentication
+  </p>
+
+  <Steps>
+    <Step title="Deploy the infrastructure">
+      Clone the repository and configure your environment variables. NeoSC uses Docker Compose for easy deployment.
+
+      ```bash
+      git clone https://github.com/infra-neo/NeoSC.git
+      cd NeoSC
+      cp infra/.env.example infra/.env
+      ```
+
+      Edit `infra/.env` to configure your Zitadel SSO credentials and domain settings.
+    </Step>
+
+    <Step title="Start the services">
+      Launch the full stack including Pomerium reverse proxy, FastAPI backend, React frontend, and MongoDB.
+
+      ```bash
+      cd infra
+      docker compose up -d
+      ```
+
+      <Note>
+        The platform will be available at `https://portal.kappa4.com` (or your configured domain). Pomerium handles authentication and proxying.
+      </Note>
+    </Step>
+
+    <Step title="Configure Zitadel SSO">
+      Set up your Zitadel application with the correct redirect URIs and scopes.
+
+      ```yaml
+      Redirect URI: https://portal.kappa4.com/auth/callback
+      Post Logout URI: https://portal.kappa4.com
+      Grant Types: Authorization Code, Refresh Token
+      ```
+
+      See the [Zitadel SSO guide](/authentication/zitadel-sso) for detailed configuration steps.
+    </Step>
+
+    <Step title="Launch your first workspace">
+      Access the dashboard and launch a secure workspace. NeoSC supports Linux, Windows, browser, dev container, and admin desktop environments.
+
+      ```bash
+      curl -X POST https://api.portal.kappa4.com/api/workspaces/{id}/launch \
+        -H "Authorization: Bearer YOUR_TOKEN"
+      ```
+
+      <Accordion title="Example response">
+        ```json
+        {
+          "id": "workspace-123",
+          "status": "running",
+          "connection": {
+            "url": "https://workspace-123.portal.kappa4.com",
+            "tunnel_status": "encrypted"
+          }
+        }
+        ```
+      </Accordion>
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Explore by Topic
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Dive into NeoSC's core capabilities and security features
+  </p>
+
+  <CardGroup cols={2}>
+    <Card
+      title="Secure Workspaces"
+      icon="desktop"
+      href="/features/workspaces"
+    >
+      Deploy Linux, Windows, browser, and dev container workspaces with full isolation and security controls.
+    </Card>
+    <Card
+      title="Session Management"
+      icon="clock"
+      href="/features/sessions"
+    >
+      Track active sessions, monitor connections, and enforce security policies with real-time visibility.
+    </Card>
+    <Card
+      title="Zitadel SSO"
+      icon="fingerprint"
+      href="/authentication/zitadel-sso"
+    >
+      Integrate enterprise SSO with OIDC PKCE flow, supporting multiple identity providers and MFA.
+    </Card>
+    <Card
+      title="Zero Trust Architecture"
+      icon="shield-halved"
+      href="/infrastructure/zero-trust"
+    >
+      Implement Zero Trust networking with Pomerium reverse proxy and NetBird WireGuard tunneling.
+    </Card>
+    <Card
+      title="Audit & Compliance"
+      icon="list-check"
+      href="/features/audit-logs"
+    >
+      Comprehensive audit logging for all user actions, workspace operations, and security events.
+    </Card>
+    <Card
+      title="API Integration"
+      icon="code"
+      href="/api/overview"
+    >
+      Full REST API for automation, integrations, and custom workflows with your existing systems.
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+    Key Features
+  </h2>
+  <p className="text-base text-gray-600 dark:text-gray-400 mb-8">
+    Enterprise security and flexibility in a modern cloud platform
+  </p>
+
+  <div className="grid md:grid-cols-2 gap-6">
+    <div className="border border-gray-200 dark:border-[#27272a] rounded-xl p-6 bg-white dark:bg-[#1a1d27] hover:border-[#0066CC] dark:hover:border-[#0066CC] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-lg bg-[#0066CC]/10 dark:bg-[#0066CC]/20 flex items-center justify-center flex-shrink-0">
+          <svg className="w-5 h-5 text-[#0066CC]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Zero Trust Network</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Every connection authenticated and encrypted with Pomerium reverse proxy and NetBird WireGuard tunneling.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="border border-gray-200 dark:border-[#27272a] rounded-xl p-6 bg-white dark:bg-[#1a1d27] hover:border-[#0066CC] dark:hover:border-[#0066CC] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-lg bg-[#0066CC]/10 dark:bg-[#0066CC]/20 flex items-center justify-center flex-shrink-0">
+          <svg className="w-5 h-5 text-[#0066CC]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Enterprise SSO</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Zitadel OIDC integration with PKCE flow, supporting multiple identity providers and MFA enforcement.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="border border-gray-200 dark:border-[#27272a] rounded-xl p-6 bg-white dark:bg-[#1a1d27] hover:border-[#0066CC] dark:hover:border-[#0066CC] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-lg bg-[#0066CC]/10 dark:bg-[#0066CC]/20 flex items-center justify-center flex-shrink-0">
+          <svg className="w-5 h-5 text-[#0066CC]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Multi-Tenant Organizations</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Isolate workspaces and users by organization with independent security policies and resource limits.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="border border-gray-200 dark:border-[#27272a] rounded-xl p-6 bg-white dark:bg-[#1a1d27] hover:border-[#0066CC] dark:hover:border-[#0066CC] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-lg bg-[#0066CC]/10 dark:bg-[#0066CC]/20 flex items-center justify-center flex-shrink-0">
+          <svg className="w-5 h-5 text-[#0066CC]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white mb-2">Complete Audit Trail</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Track every action with comprehensive audit logs including user activity, workspace operations, and security events.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="border border-gray-200 dark:border-[#27272a] rounded-2xl p-8 bg-gradient-to-br from-gray-50 to-white dark:from-[#1a1d27] dark:to-[#0f1117]">
+    <div className="max-w-3xl mx-auto text-center">
+      <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-4">
+        Ready to get started?
+      </h2>
+      <p className="text-base text-gray-600 dark:text-gray-400 mb-6">
+        Deploy NeoSC in your infrastructure and start providing secure cloud workspaces to your team.
+      </p>
+      <div className="flex flex-wrap justify-center gap-4">
+        <a
+          href="/quickstart"
+          className="inline-flex items-center px-6 py-3 rounded-lg bg-[#0066CC] text-white font-semibold hover:bg-[#0052A3] transition-colors"
+        >
+          Start Building
+        </a>
+        <a
+          href="/architecture"
+          className="inline-flex items-center px-6 py-3 rounded-lg border border-gray-300 dark:border-[#27272a] text-gray-900 dark:text-white font-semibold hover:bg-gray-50 dark:hover:bg-[#1a1d27] transition-colors"
+        >
+          View Architecture
+        </a>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,366 @@
+---
+title: Deployment Guide
+description: Prerequisites, environment setup, and deployment instructions for NeoSC infrastructure
+---
+
+## Overview
+
+NeoSC uses a Docker-based infrastructure with Zero Trust networking provided by Pomerium and Zitadel. This guide covers the prerequisites, environment configuration, and deployment steps.
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Internet                              │
+└───────────────────────┬─────────────────────────────────────┘
+                        │
+           ┌────────────▼──────────────┐
+           │   Pomerium (gate)         │  Zero Trust Proxy
+           │   :443, :80               │  Authentication Gateway
+           └────────────┬──────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+   ┌────▼─────┐   ┌────▼─────┐   ┌────▼─────┐
+   │ Frontend │   │ Backend  │   │  MongoDB │
+   │  :3000   │   │  :8001   │   │  :27017  │
+   └──────────┘   └──────────┘   └──────────┘
+         Internal Network (no external exposure)
+```
+
+## Domain Structure
+
+| Domain | Service | Purpose |
+|--------|---------|----------|
+| `manager.kappa4.com` | Zitadel | Identity Provider (OIDC) |
+| `gate.kappa4.com` | Pomerium | Authentication service / OAuth flow |
+| `portal.kappa4.com` | Frontend | React SPA (protected) |
+| `api.portal.kappa4.com` | Backend | FastAPI REST API (protected) |
+| `admin.portal.kappa4.com` | Backend | Admin panel (admin-only) |
+| `workspace.portal.kappa4.com` | Kasm Proxy | VDI streaming (protected) |
+
+## Prerequisites
+
+### System Requirements
+
+- Docker Engine 20.10+
+- Docker Compose 2.0+
+- 4GB RAM minimum (8GB recommended)
+- 20GB disk space
+- Linux host (Ubuntu 20.04+ or similar)
+
+### External Dependencies
+
+<Note>
+  **Zitadel Instance Required**: You must have a Zitadel instance running at `manager.kappa4.com` before deploying NeoSC. Zitadel acts as the OIDC Identity Provider.
+</Note>
+
+- **Zitadel** at `manager.kappa4.com` (pre-existing)
+- **DNS Records** configured for all domains
+- **TLS Certificates** for HTTPS (Let's Encrypt recommended)
+
+### DNS Configuration
+
+Configure the following DNS records:
+
+```bash
+gate.kappa4.com              A      <SERVER_IP>
+portal.kappa4.com            A      <SERVER_IP>
+api.portal.kappa4.com        CNAME  portal.kappa4.com
+workspace.portal.kappa4.com  CNAME  portal.kappa4.com
+admin.portal.kappa4.com      CNAME  portal.kappa4.com
+```
+
+## Environment Configuration
+
+### Step 1: Configure Zitadel OIDC Application
+
+Create a new application in Zitadel:
+
+1. Log into Zitadel at `https://manager.kappa4.com`
+2. Create a new project: **NeoSC Portal**
+3. Add application with these settings:
+   - **Name**: NeoSC Pomerium Gateway
+   - **Type**: Web
+   - **Auth Method**: Basic (client_id + client_secret)
+   - **Redirect URI**: `https://gate.kappa4.com/oauth2/callback`
+   - **Post-logout URI**: `https://portal.kappa4.com`
+   - **Grant Types**: authorization_code, refresh_token
+
+4. Configure scopes:
+   ```
+   openid
+   profile
+   email
+   offline_access
+   urn:zitadel:iam:org:projects:roles
+   ```
+
+5. Create roles in the project:
+   - `admin` - Full administrative access
+   - `neosc` - Standard NeoSC user
+   - `user` - Basic user access
+   - `demo-user` - Demo session access
+
+6. Note the **Client ID** and **Client Secret** for the next step.
+
+### Step 2: Generate Secrets
+
+Generate required secrets for Pomerium:
+
+```bash
+# Generate shared secret (32 bytes)
+openssl rand -base64 32
+# Output: abc123... (save as POMERIUM_SHARED_SECRET)
+
+# Generate cookie secret (32 bytes)
+openssl rand -base64 32
+# Output: xyz789... (save as POMERIUM_COOKIE_SECRET)
+
+# Generate JWT secret for backend
+openssl rand -base64 32
+# Output: jwt456... (save as JWT_SECRET)
+```
+
+### Step 3: Create Environment File
+
+Create `infra/.env` with the following variables:
+
+```bash
+# Zitadel Configuration
+ZITADEL_CLIENT_ID=<client-id-from-zitadel>
+ZITADEL_CLIENT_SECRET=<client-secret-from-zitadel>
+ZITADEL_PROJECT_ID=<project-id-from-zitadel>
+
+# Pomerium Secrets
+POMERIUM_SHARED_SECRET=<generated-shared-secret>
+POMERIUM_COOKIE_SECRET=<generated-cookie-secret>
+
+# Backend Configuration
+JWT_SECRET=<generated-jwt-secret>
+
+# MongoDB (optional, defaults work for local)
+MONGO_URL=mongodb://mongo:27017/neosc
+```
+
+<Warning>
+  Never commit the `.env` file to version control. Keep secrets secure and use a secrets manager in production.
+</Warning>
+
+## Deployment Steps
+
+### Local Development Deployment
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/neosc.git
+cd neosc
+
+# 2. Configure environment
+cd infra
+cp .env.example .env
+# Edit .env with your values
+nano .env
+
+# 3. Build and start services
+docker compose up -d
+
+# 4. Verify services are running
+docker compose ps
+
+# 5. Check logs
+docker compose logs -f
+```
+
+### Production Deployment
+
+For production, additional considerations:
+
+1. **TLS Certificates**: Use Let's Encrypt with certbot or cert-manager
+2. **Firewall Rules**: Only expose ports 80 and 443
+3. **Resource Limits**: Adjust container resources in docker-compose.yml
+4. **Backups**: Configure MongoDB backups
+5. **Monitoring**: Deploy Prometheus + Grafana
+
+```bash
+# Production deployment with resource limits
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+## Verification
+
+### Health Checks
+
+Verify all services are healthy:
+
+```bash
+# Check Pomerium
+curl -I https://gate.kappa4.com
+# Expected: 302 redirect to Zitadel login
+
+# Check frontend (requires authentication)
+curl -I https://portal.kappa4.com
+# Expected: 302 to gate.kappa4.com/oauth2/sign_in
+
+# Check backend health endpoint
+docker exec neosc-backend wget -qO- http://localhost:8001/health
+# Expected: {"status": "healthy"}
+
+# Check MongoDB
+docker exec neosc-mongo mongosh --eval "db.adminCommand('ping')"
+# Expected: { ok: 1 }
+```
+
+### Service Status
+
+```bash
+# View service status
+docker compose ps
+
+# View service logs
+docker compose logs pomerium
+docker compose logs frontend
+docker compose logs backend
+docker compose logs mongo
+
+# Follow all logs
+docker compose logs -f
+```
+
+## Post-Deployment
+
+### First Login
+
+1. Navigate to `https://portal.kappa4.com`
+2. You'll be redirected to `gate.kappa4.com`
+3. Authenticate with Zitadel credentials
+4. Grant consent to the application
+5. You'll be redirected back to the portal
+
+### User Management
+
+Manage users and roles in Zitadel:
+
+1. Log into Zitadel admin console
+2. Navigate to your organization
+3. Add users and assign roles:
+   - `admin` - Full access including admin panel
+   - `neosc` - Standard portal access
+   - `user` - Basic access
+
+## Troubleshooting
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="Pomerium shows 'Invalid OAuth state'">
+    This usually indicates:
+    - Incorrect redirect URI configured in Zitadel
+    - Cookie domain mismatch
+    - Clock skew between servers
+
+    **Solution**: Verify redirect URI is exactly `https://gate.kappa4.com/oauth2/callback` in Zitadel.
+  </Accordion>
+
+  <Accordion title="Frontend shows blank page">
+    Check that environment variables are correctly set:
+    ```bash
+    docker compose logs frontend
+    ```
+    Verify `REACT_APP_API_URL` points to `https://api.portal.kappa4.com`
+  </Accordion>
+
+  <Accordion title="Backend returns 401 Unauthorized">
+    This indicates Pomerium headers are not being passed correctly.
+    
+    **Check**:
+    - `TRUST_POMERIUM_HEADERS=true` in backend environment
+    - Requests are coming through Pomerium (not direct to backend)
+  </Accordion>
+
+  <Accordion title="MongoDB connection refused">
+    Ensure MongoDB is on the internal network:
+    ```bash
+    docker compose exec backend ping mongo
+    ```
+    If this fails, recreate the networks:
+    ```bash
+    docker compose down
+    docker network prune
+    docker compose up -d
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Debug Mode
+
+Enable debug logging:
+
+```yaml
+# In docker-compose.yml
+pomerium:
+  environment:
+    - POMERIUM_LOG_LEVEL=debug
+
+backend:
+  environment:
+    - LOG_LEVEL=debug
+```
+
+## Maintenance
+
+### Updates
+
+```bash
+# Pull latest images
+docker compose pull
+
+# Restart services with new images
+docker compose up -d
+
+# Remove old images
+docker image prune -a
+```
+
+### Backups
+
+```bash
+# Backup MongoDB
+docker exec neosc-mongo mongodump --out /backup
+docker cp neosc-mongo:/backup ./mongodb-backup-$(date +%Y%m%d)
+
+# Backup Pomerium config
+tar -czf pomerium-config-$(date +%Y%m%d).tar.gz infra/pomerium/
+```
+
+### Monitoring
+
+Monitor resource usage:
+
+```bash
+# Container stats
+docker stats
+
+# Disk usage
+docker system df
+
+# Network inspection
+docker network inspect infra_internal
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zero Trust Architecture" icon="shield" href="/infrastructure/zero-trust">
+    Learn about the Zero Trust security model
+  </Card>
+  <Card title="Pomerium Configuration" icon="gear" href="/infrastructure/pomerium">
+    Detailed Pomerium proxy configuration
+  </Card>
+  <Card title="Docker Compose" icon="docker" href="/infrastructure/docker-compose">
+    Deep dive into service orchestration
+  </Card>
+  <Card title="NetBird Integration" icon="network-wired" href="/infrastructure/netbird">
+    Configure WireGuard mesh networking
+  </Card>
+</CardGroup>
